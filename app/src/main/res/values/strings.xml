@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">FlightCue</string>
+    <string name="fgs_channel_name">FlightCue sensor detection</string>
+
+</resources>

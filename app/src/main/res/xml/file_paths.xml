@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Allow sharing the rotated logs -->
+    <files-path name="logs" path="flight_logs/" />
+    <!-- Allow sharing temp CSV exports -->
+    <cache-path name="exports" path="exports/" />
+</paths>
