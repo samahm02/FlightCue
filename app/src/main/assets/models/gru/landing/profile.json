@@ -1,0 +1,108 @@
+{
+  "model_type": "gru",
+  "export_event": "LANDING",
+  "target_event": "landing",
+  "head_index": 1,
+  "threshold": 0.95,
+  "trigger_k": 2,
+  "scaler_fit_mode": "unique_windows",
+  "seq_len": 25,
+  "label_shift": 0,
+  "label_idx": 12,
+  "n_features": 154,
+  "timing_columns": {
+    "order_col": "t_end",
+    "detect_time_col": "t_end",
+    "label_time_col": "t_anchor"
+  },
+  "timing": {
+    "hop_s": 20.0,
+    "win_len_s": 20.0,
+    "future_windows": 12
+  },
+  "event_focused_training": {
+    "primary_oversample": 1,
+    "oversample_factor": 2,
+    "main_loss_weight": 1.0,
+    "aux_loss_weight": 0.0,
+    "early_stop_metric": "val_pr_auc_primary"
+  },
+  "thresholds_from_val": {
+    "takeoff_thr": 0.0,
+    "landing_thr": 0.95
+  },
+  "use_temperature_scaling": false,
+  "calibration_temperature": 1.0,
+  "metrics_pytorch": {
+    "val": {
+      "takeoff": {
+        "pr_auc": 0.0,
+        "roc_auc": 0.5,
+        "threshold": 0.0,
+        "TP": 0,
+        "FN": 0,
+        "FP": 0,
+        "TN": 0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "fbeta": 0.0
+      },
+      "landing": {
+        "pr_auc": 0.7689521055664276,
+        "roc_auc": 0.9887586140487494,
+        "threshold": 0.95,
+        "TP": 99,
+        "FN": 111,
+        "FP": 7,
+        "TN": 22741,
+        "precision": 0.9339622641509434,
+        "recall": 0.4714285714285714,
+        "f1": 0.6265822784805668,
+        "fbeta": 0.523255813953364
+      }
+    },
+    "test": {
+      "takeoff": {
+        "pr_auc": 0.0,
+        "roc_auc": 0.5,
+        "threshold": 0.0,
+        "TP": 0,
+        "FN": 0,
+        "FP": 0,
+        "TN": 0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "fbeta": 0.0
+      },
+      "landing": {
+        "pr_auc": 0.8054288356313142,
+        "roc_auc": 0.9895749019474194,
+        "threshold": 0.95,
+        "TP": 131,
+        "FN": 121,
+        "FP": 5,
+        "TN": 27940,
+        "precision": 0.9632352941176471,
+        "recall": 0.5198412698412699,
+        "f1": 0.6752577319583075,
+        "fbeta": 0.5725524475523166
+      }
+    }
+  },
+  "onnx": {
+    "input_name": "x",
+    "output_name": "p",
+    "output_is_probability": true,
+    "opset_requested": 18,
+    "opset_actual": 18,
+    "static_batch": 1
+  },
+  "onnx_parity": {
+    "golden_rows": 32,
+    "max_abs_diff": null,
+    "warn_if_gt": 0.02,
+    "status": "unknown"
+  }
+}

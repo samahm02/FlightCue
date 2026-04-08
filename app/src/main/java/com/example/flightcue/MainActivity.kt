@@ -1,3 +1,4 @@
+// file: app/src/main/java/com/example/flightcue/MainActivity.kt
 package com.example.flightcue
 
 import android.Manifest
@@ -16,34 +17,69 @@ import androidx.compose.material.icons.outlined.AirplanemodeActive
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.PlayCircle
 import androidx.compose.material.icons.outlined.Settings
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.Icon
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
+import com.example.flightcue.data.SettingsStore
 import com.example.flightcue.service.FlightDetectionService
+import com.example.flightcue.ui.DevScreen
 import com.example.flightcue.ui.HistoryScreen
 import com.example.flightcue.ui.HomeScreen
-import com.example.flightcue.ui.DevScreen
 import com.example.flightcue.ui.SettingsScreen
 import com.example.flightcue.ui.theme.FlightCueTheme
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.launch
 
 enum class MainTab { Home, History, Settings, Dev }
 
 class MainActivity : ComponentActivity() {
 
+    private lateinit var settings: SettingsStore
+
+    private var notifRequestInFlight = false
+    private var pendingStartAfterNotifGrant = false
+
     private val requestNotifPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
+        notifRequestInFlight = false
+
         if (granted) {
-            FlightDetectionService.ensureRunning(applicationContext)
-        } else {
-            // Keep running service even if notifications are denied.
-            FlightDetectionService.ensureRunning(applicationContext)
             Toast.makeText(
                 this,
-                "Notifications denied. FlightCue still runs in background.",
+                "Notifications enabled. You will now see 'FlightCue running' and flight event notifications.",
+                Toast.LENGTH_SHORT
+            ).show()
+
+            // Start service now that notification posting is allowed
+            if (pendingStartAfterNotifGrant) {
+                pendingStartAfterNotifGrant = false
+                FlightDetectionService.start(applicationContext)
+            }
+        } else {
+            pendingStartAfterNotifGrant = false
+
+            Toast.makeText(
+                this,
+                "Notifications denied. FlightCue cannot run reliably in the background without a foreground notification. Enable notifications in system settings to use background detection.",
                 Toast.LENGTH_LONG
             ).show()
+
+            // Safety: ensure we’re not running a foreground service without the ability to show its notif
+            FlightDetectionService.stop(applicationContext)
         }
     }
 
@@ -51,22 +87,56 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        if (Build.VERSION.SDK_INT >= 33) {
-            val granted = ContextCompat.checkSelfPermission(
-                this, Manifest.permission.POST_NOTIFICATIONS
-            ) == PackageManager.PERMISSION_GRANTED
-            if (!granted) {
-                requestNotifPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
-            } else {
-                FlightDetectionService.ensureRunning(applicationContext)
+        settings = SettingsStore(applicationContext)
+
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                settings.detectionEnabled.collectLatest { enabled ->
+                    if (enabled) {
+                        if (Build.VERSION.SDK_INT >= 33) {
+                            val granted = ContextCompat.checkSelfPermission(
+                                this@MainActivity,
+                                Manifest.permission.POST_NOTIFICATIONS
+                            ) == PackageManager.PERMISSION_GRANTED
+
+                            if (!granted) {
+                                // Do NOT start service yet -> prevents “first start notification missing”
+                                pendingStartAfterNotifGrant = true
+                                maybeRequestNotificationPermissionOnce()
+                                return@collectLatest
+                            }
+                        }
+
+                        // Permission not needed (API < 33) or already granted
+                        FlightDetectionService.start(applicationContext)
+
+                    } else {
+                        pendingStartAfterNotifGrant = false
+                        FlightDetectionService.stop(applicationContext)
+                    }
+                }
             }
-        } else {
-            FlightDetectionService.ensureRunning(applicationContext)
         }
 
         setContent { FlightCueTheme { RootScaffold() } }
     }
+
+    private fun maybeRequestNotificationPermissionOnce() {
+        if (Build.VERSION.SDK_INT < 33) return
+        if (notifRequestInFlight) return
+
+        val granted = ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.POST_NOTIFICATIONS
+        ) == PackageManager.PERMISSION_GRANTED
+
+        if (!granted) {
+            notifRequestInFlight = true
+            requestNotifPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
 }
+
 
 @Composable
 private fun RootScaffold() {
@@ -106,7 +176,7 @@ private fun RootScaffold() {
             MainTab.Home     -> Box(Modifier.padding(inner)) { HomeScreen() }
             MainTab.History  -> HistoryScreen(Modifier.padding(inner))
             MainTab.Settings -> Box(Modifier.padding(inner)) { SettingsScreen() }
-            MainTab.Dev   -> Box(Modifier.padding(inner)) { DevScreen() }
+            MainTab.Dev      -> Box(Modifier.padding(inner)) { DevScreen() }
         }
     }
 }

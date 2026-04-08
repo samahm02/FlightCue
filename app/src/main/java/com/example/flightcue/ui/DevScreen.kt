@@ -3,23 +3,13 @@ package com.example.flightcue.ui
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.Divider
-import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.LocalContentColor
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -28,15 +18,17 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.flightcue.data.replay.ReplaySummary
 import com.example.flightcue.viewmodel.ReplayViewModel
+import java.util.Locale
+import kotlin.math.abs
 
 @Composable
 fun DevScreen(vm: ReplayViewModel = viewModel()) {
-    val uri by vm.fileUri.collectAsState()
-    val fileName by vm.fileName.collectAsState()
-    val msgs by vm.messages.collectAsState()
-    val summary by vm.summary.collectAsState()
-    val running by vm.running.collectAsState()
-    val progress by vm.progress.collectAsState()
+    val uri          by vm.fileUri.collectAsState()
+    val fileName     by vm.fileName.collectAsState()
+    val msgs         by vm.messages.collectAsState()
+    val summary      by vm.summary.collectAsState()
+    val running      by vm.running.collectAsState()
+    val progress     by vm.progress.collectAsState()
     val progressText by vm.progressText.collectAsState()
 
     val picker = rememberLauncherForActivityResult(
@@ -44,30 +36,31 @@ fun DevScreen(vm: ReplayViewModel = viewModel()) {
     ) { picked: Uri? ->
         picked?.let {
             vm.open(it)
-            vm.run()   // start replay immediately after picking
+            vm.run()
         }
     }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .padding(20.dp)
+            .background(MaterialTheme.colorScheme.background)
+            .padding(horizontal = 20.dp, vertical = 24.dp)
     ) {
         Column(
             modifier = Modifier.fillMaxSize(),
-            verticalArrangement = Arrangement.Top
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             Text(
-                "Dev / Replay",
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.SemiBold
+                "Replay",
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onBackground
             )
 
-            Spacer(Modifier.height(16.dp))
-
+            // File picker row
             Row(
                 Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Button(
@@ -77,66 +70,109 @@ fun DevScreen(vm: ReplayViewModel = viewModel()) {
                                 "text/*",
                                 "application/zip",
                                 "application/x-zip-compressed",
-                                "application/octet-stream",
+                                "application/octet-stream"
                             )
                         )
                     },
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(48.dp),
-                    shape = RoundedCornerShape(999.dp)
+                    modifier = Modifier.weight(1f).height(48.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary
+                    )
                 ) {
                     Text(
-                        if (uri == null) "Pick recording (.txt/.csv/.tsv/.zip)"
-                        else "Pick another file"
+                        if (uri == null) "Pick recording" else "Pick another file",
+                        fontWeight = FontWeight.Medium
                     )
                 }
 
-                when {
-                    running -> {
-                        OutlinedButton(
-                            onClick = { vm.cancelRun() },
-                            modifier = Modifier.height(48.dp),
-                            shape = RoundedCornerShape(999.dp)
-                        ) {
-                            Text("Cancel")
-                        }
-                    }
+                if (running) {
+                    OutlinedButton(
+                        onClick = { vm.cancelRun() },
+                        modifier = Modifier.height(48.dp),
+                        shape = RoundedCornerShape(12.dp)
+                    ) { Text("Cancel") }
+                } else if (uri != null) {
+                    OutlinedButton(
+                        onClick = { vm.run() },
+                        modifier = Modifier.height(48.dp),
+                        shape = RoundedCornerShape(12.dp)
+                    ) { Text("Run again") }
+                }
+            }
 
-                    uri != null -> {
-                        OutlinedButton(
-                            onClick = { vm.run() },
-                            modifier = Modifier.height(48.dp),
-                            shape = RoundedCornerShape(999.dp)
-                        ) {
-                            Text("Run again")
-                        }
+            if (fileName != null) {
+                Text(
+                    fileName!!,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            // Progress
+            if (running) {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    LinearProgressIndicator(
+                        progress = { progress.coerceIn(0f, 1f) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(6.dp)
+                            .clip(RoundedCornerShape(999.dp)),
+                        color = MaterialTheme.colorScheme.primary,
+                        trackColor = MaterialTheme.colorScheme.surfaceVariant
+                    )
+                    if (progressText.isNotBlank()) {
+                        Text(
+                            progressText,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                 }
             }
 
-            if (uri != null) {
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    "Selected file: ${fileName ?: "Unknown"}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = LocalContentColor.current.copy(alpha = 0.8f)
-                )
-            }
-
-            ReplayProgress(
-                isRunning = running,
-                progress = progress,
-                progressText = progressText,
-                modifier = Modifier.padding(top = 12.dp)
+            // Message log
+            Text(
+                "Messages",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onBackground
             )
 
-            ReplayMessages(
-                messages = msgs,
+            Surface(
                 modifier = Modifier
-                    .padding(top = 24.dp)
-                    .weight(1f, fill = true)
-            )
+                    .fillMaxWidth()
+                    .weight(1f),
+                tonalElevation = 2.dp,
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant
+            ) {
+                if (msgs.isEmpty()) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text(
+                            "Pick a recording file to begin.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                        contentPadding = PaddingValues(bottom = 8.dp)
+                    ) {
+                        itemsIndexed(msgs) { _, m ->
+                            Text(
+                                "• $m",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    }
+                }
+            }
         }
 
         if (summary != null) {
@@ -149,118 +185,74 @@ fun DevScreen(vm: ReplayViewModel = viewModel()) {
 }
 
 @Composable
-private fun ReplayProgress(
-    isRunning: Boolean,
-    progress: Float,
-    progressText: String,
-    modifier: Modifier = Modifier
-) {
-    if (!isRunning) return
-
-    Column(
-        modifier = modifier.fillMaxWidth()
-    ) {
-        Text(
-            text = "Analyzing flight (ML-only)…",
-            style = MaterialTheme.typography.labelLarge
-        )
-        Spacer(Modifier.height(8.dp))
-        LinearProgressIndicator(
-            progress = { progress.coerceIn(0f, 1f) },
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(6.dp)
-                .clip(RoundedCornerShape(999.dp))
-        )
-        if (progressText.isNotBlank()) {
-            Spacer(Modifier.height(4.dp))
-            Text(
-                progressText,
-                style = MaterialTheme.typography.bodySmall,
-                color = LocalContentColor.current.copy(alpha = 0.7f)
-            )
-        }
-    }
-}
-
-@Composable
-private fun ReplayMessages(
-    messages: List<String>,
-    modifier: Modifier = Modifier
-) {
-    Column(
-        modifier = modifier.fillMaxWidth()
-    ) {
-        Text("Messages", fontWeight = FontWeight.Medium)
-        Spacer(Modifier.height(8.dp))
-
-        Surface(
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(min = 120.dp, max = 260.dp),
-            tonalElevation = 2.dp,
-            shape = RoundedCornerShape(16.dp)
-        ) {
-            if (messages.isEmpty()) {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        "No replay run yet. Pick a file to start.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = LocalContentColor.current.copy(alpha = 0.6f)
-                    )
-                }
-            } else {
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                    contentPadding = PaddingValues(bottom = 8.dp)
-                ) {
-                    // index-based keys -> no duplicates crash
-                    itemsIndexed(messages) { _, m ->
-                        Text(
-                            text = "• $m",
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun FlightStatsDialog(
-    summary: ReplaySummary,
-    onDismiss: () -> Unit
-) {
+private fun FlightStatsDialog(summary: ReplaySummary, onDismiss: () -> Unit) {
     AlertDialog(
         onDismissRequest = onDismiss,
         confirmButton = {
-            TextButton(onClick = onDismiss) { Text("CLOSE") }
+            TextButton(onClick = onDismiss) { Text("Close") }
         },
-        title = { Text("Flight stats (ML)") },
+        title = {
+            Text("Replay results", fontWeight = FontWeight.SemiBold)
+        },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Model takeoff time: ${fmtClock(summary.takeoffDataSec)}")
-                Text("Model landing time: ${fmtClock(summary.landingDataSec)}")
-                Spacer(Modifier.height(8.dp))
-                Text("Number of flights detected: ${summary.flightsDetected}")
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                ResultSection(
+                    title   = "Takeoff",
+                    detected = summary.takeoffDataSec,
+                    marker   = summary.takeoffMarkerSec,
+                    delta    = summary.takeoffDeltaSec
+                )
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
+                ResultSection(
+                    title   = "Landing",
+                    detected = summary.landingDataSec,
+                    marker   = summary.landingMarkerSec,
+                    delta    = summary.landingDeltaSec
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "Complete flights detected: ${summary.flightsDetected}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
     )
 }
 
-private fun fmtClock(t: Double?): String {
-    if (t == null) return "n/a"
-    val s = t.toInt()
-    val hh = s / 3600
-    val mm = (s % 3600) / 60
-    val ss = s % 60
-    return "%02d:%02d:%02d".format(hh, mm, ss)
+@Composable
+private fun ResultSection(
+    title: String,
+    detected: Double?,
+    marker: Double?,
+    delta: Double?
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(title, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyMedium)
+        ResultRow("Detected", fmtClockOrDash(detected, "not detected"))
+        ResultRow("Marker",   fmtClockOrDash(marker,   "no marker"))
+        ResultRow("Δ",        fmtDelta(delta))
+    }
 }
-//17
+
+@Composable
+private fun ResultRow(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(value, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurface)
+    }
+}
+
+private fun fmtClockOrDash(t: Double?, fallback: String): String {
+    if (t == null) return fallback
+    val s = t.toInt()
+    return "%02d:%02d:%02d".format(Locale.US, s / 3600, (s % 3600) / 60, s % 60)
+}
+
+private fun fmtDelta(d: Double?): String {
+    if (d == null) return "n/a"
+    return "${if (d >= 0) "+" else "-"}${"%.1f".format(Locale.US, abs(d))} s"
+}

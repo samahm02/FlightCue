@@ -1,9 +1,16 @@
 package com.example.flightcue.domain.state
 
+import kotlin.math.abs
+
 /**
- * Hysteretic edge detector with optional EMA smoothing on the input probability.
- * - Use EMA (emaAlpha != null) to reduce noise without forcing multi-hop streaks.
- *   alpha ~ 2/(N+1) if you think of N as a "window" in hops.
+ * Edge detector with optional EMA smoothing.
+ *
+ * Supports BOTH:
+ *  - Hysteresis mode: tOn > tOff (classic)
+ *  - No-hysteresis mode: tOn == tOff (GRU-only recommended)
+ *
+ * In no-hysteresis mode we re-arm only when p < tOff (strict),
+ * so p == threshold is treated as "ON" not "OFF".
  */
 class EdgeTrigger(
     private val tOn: Double,
@@ -11,32 +18,37 @@ class EdgeTrigger(
     minRunWins: Int,
     private val cooldownSec: Double,
     startArmed: Boolean = true,
-    private val emaAlpha: Double? = null,   // <- enable EMA when not null
+    private val emaAlpha: Double? = null,
 ) {
-    init { require(tOn > tOff) }
+    init { require(tOn >= tOff) { "EdgeTrigger: require tOn >= tOff (got tOn=$tOn tOff=$tOff)" } }
 
     private val minRunWinsClamped = if (minRunWins < 1) 1 else minRunWins
+
+    // Treat as "no hysteresis" if thresholds are equal (within epsilon).
+    private val noHyst = abs(tOn - tOff) <= 1e-12
 
     private var armed = startArmed
     private var run = 0
     private var lastFire = Double.NEGATIVE_INFINITY
-    private var s: Double? = null           // EMA state
+    private var s: Double? = null
 
     fun update(pRaw: Double, t: Double): Boolean {
-        // Smooth or pass-through
         val p = emaAlpha?.let { a ->
             s = s?.let { it + a * (pRaw - it) } ?: pRaw
             s!!
         } ?: pRaw
 
-        // Re-arm when we fall to/below tOff
-        if (p <= tOff) {
+        // Re-arm logic
+        // - Hysteresis: re-arm when p <= tOff
+        // - No-hysteresis: re-arm when p <  tOff (strict), so p==tOn doesn't get classified as OFF.
+        val rearm = if (noHyst) (p < tOff) else (p <= tOff)
+        if (rearm) {
             armed = true
             run = 0
             return false
         }
 
-        // Above the "on" threshold
+        // ON logic
         if (p >= tOn) {
             if (!armed) return false
             if (t - lastFire <= cooldownSec) return false
@@ -44,14 +56,14 @@ class EdgeTrigger(
             run += 1
             if (run >= minRunWinsClamped) {
                 lastFire = t
-                armed = false            // require dip below tOff to re-arm
+                armed = false
                 run = 0
                 return true
             }
             return false
         }
 
-        // Between tOff and tOn: neutral; reset consecutive-on run
+        // Between thresholds (only meaningful when hysteresis is enabled)
         run = 0
         return false
     }
@@ -60,6 +72,6 @@ class EdgeTrigger(
         armed = startArmed
         run = 0
         lastFire = lastFireSec
-        s = null                           // clear EMA state
+        s = null
     }
 }

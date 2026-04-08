@@ -4,11 +4,14 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 
+// ReplayRepository.kt
+// Entry point for opening a recording from a URI.
+// Takes a persistable read permission where possible and delegates parsing to RecordingParser.
 class ReplayRepository {
-    fun openRecording(context: Context, uri: Uri): ReplaySource {
+
+    fun openRecording(context: Context, uri: Uri): Recording {
         takePersistableIfPossible(context, uri)
-        val rec = RecordingParser.parse(context, uri)
-        return ReplaySource(rec)
+        return RecordingParser.parse(context, uri)
     }
 
     private fun takePersistableIfPossible(context: Context, uri: Uri) {

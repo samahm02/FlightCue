@@ -5,24 +5,24 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.os.Handler
 import android.util.Log
 import com.example.flightcue.domain.events.FlightState
 import com.example.flightcue.domain.util.Params
 
-/**
- * Single place that owns SensorManager + registration for both ACCEL & BARO.
- * Pushes parsed samples to the provided callbacks.
- */
 class SensorHub(
     context: Context,
     private val onAccel: (tSec: Double, ax: Double, ay: Double, az: Double) -> Unit,
     private val onBaro: (tSec: Double, pressure: Double) -> Unit,
-    private val logRates: Boolean = false
+    private val logRates: Boolean = false,
+    private val callbackHandler: Handler? = null
 ) : SensorEventListener {
 
     private val sm = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
     private val accel: Sensor? = sm.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
-    private val baro:  Sensor? = sm.getDefaultSensor(Sensor.TYPE_PRESSURE)
+    private val baro: Sensor? = sm.getDefaultSensor(Sensor.TYPE_PRESSURE)
+
+    private var registered = false
 
     // rate logging
     private var accCount = 0
@@ -35,39 +35,54 @@ class SensorHub(
         private const val RATE_LOG_WINDOW_NS = 2_000_000_000L
     }
 
-    /** Public API **/
+    fun unregisterAll() {
+        runCatching { sm.unregisterListener(this) }
+        registered = false
 
-    fun unregisterAll() = runCatching { sm.unregisterListener(this) }.onFailure { }.let {}
-
-    fun switchForState(state: FlightState) {
-        unregisterAll()
-        when (state) {
-            FlightState.NotFlying -> startAccel(Params.ACCEL_HZ, batchSec = 2)
-            FlightState.Flying -> {
-                if (baro == null) {
-                    Log.w(TAG, "No barometer — landing disabled; keeping ACCEL")
-                    startAccel(Params.ACCEL_HZ, batchSec = 2)
-                } else {
-                    startBaro(Params.BARO_HZ, batchSec = 5)
-                }
-            }
-        }
+        // reset rate stats too
+        accCount = 0
+        baroCount = 0
+        accWindowStartNs = 0L
+        baroWindowStartNs = 0L
     }
 
-    /** Internals **/
+    /**
+     * Your schema uses accel+baro features for BOTH events.
+     * Therefore, we keep ACCEL always on and BARO on if available.
+     *
+     * Idempotent.
+     */
+    fun switchForState(@Suppress("UNUSED_PARAMETER") state: FlightState) {
+        if (registered) return
+
+        startAccel(Params.ACCEL_HZ, batchSec = Params.SENSOR_BATCH_SEC)
+
+        if (baro == null) {
+            Log.w(TAG, "No barometer sensor available; baro features will degrade to medians.")
+        } else {
+            startBaro(Params.BARO_HZ, batchSec = Params.SENSOR_BATCH_SEC)
+        }
+
+        registered = true
+        Log.i(TAG, "Sensors registered (accel=${accel != null}, baro=${baro != null})")
+    }
 
     private fun startAccel(rateHz: Double, batchSec: Int) {
         val periodUs = hzToPeriodUs(rateHz)
         val latencyUs = batchSec * 1_000_000
-        accel?.let { sm.registerListener(this, it, periodUs, latencyUs) }
-        Log.i(TAG, "Registered ACCEL @~${"%.2f".format(rateHz)} Hz, batch ${batchSec}s (periodUs=$periodUs)")
+        accel?.let {
+            if (callbackHandler != null) sm.registerListener(this, it, periodUs, latencyUs, callbackHandler)
+            else sm.registerListener(this, it, periodUs, latencyUs)
+        }
     }
 
     private fun startBaro(rateHz: Double, batchSec: Int) {
         val periodUs = hzToPeriodUs(rateHz)
         val latencyUs = batchSec * 1_000_000
-        baro?.let { sm.registerListener(this, it, periodUs, latencyUs) }
-        Log.i(TAG, "Registered BARO  @~${"%.2f".format(rateHz)} Hz, batch ${batchSec}s (periodUs=$periodUs)")
+        baro?.let {
+            if (callbackHandler != null) sm.registerListener(this, it, periodUs, latencyUs, callbackHandler)
+            else sm.registerListener(this, it, periodUs, latencyUs)
+        }
     }
 
     private fun hzToPeriodUs(hz: Double): Int =
@@ -96,7 +111,8 @@ class SensorHub(
         if (dt >= RATE_LOG_WINDOW_NS) {
             val hz = accCount.toDouble() * 1e9 / dt.toDouble()
             Log.i(TAG, "ACCEL ≈ ${"%.1f".format(hz)} Hz (Δ=${"%.1f".format(dt / 1e9)}s)")
-            accWindowStartNs = ts; accCount = 0
+            accWindowStartNs = ts
+            accCount = 0
         }
     }
 
@@ -107,7 +123,8 @@ class SensorHub(
         if (dt >= RATE_LOG_WINDOW_NS) {
             val hz = baroCount.toDouble() * 1e9 / dt.toDouble()
             Log.i(TAG, "BARO  ≈ ${"%.1f".format(hz)} Hz (Δ=${"%.1f".format(dt / 1e9)}s)")
-            baroWindowStartNs = ts; baroCount = 0
+            baroWindowStartNs = ts
+            baroCount = 0
         }
     }
 }

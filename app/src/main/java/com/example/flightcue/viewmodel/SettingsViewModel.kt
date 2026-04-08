@@ -1,6 +1,5 @@
+// file: app/src/main/java/com/example/flightcue/viewmodel/SettingsViewModel.kt
 package com.example.flightcue.viewmodel
-
-// file: app/src/main/java/com/example/flightcue/ui/settings/SettingsViewModel.kt
 
 import android.app.Application
 import android.content.Context
@@ -26,12 +25,13 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
             initialValue = true
         )
 
+
     fun setDetectionEnabled(on: Boolean) = viewModelScope.launch {
         settings.setDetectionEnabled(on)
+        // ✅ Do NOT start/stop service here (MainActivity already owns that)
     }
 
     fun exportLogs(context: Context) {
-        // Sharing must be invoked with a real Context (Activity or composable LocalContext)
         LogExporter.shareLogsZip(context)
     }
 

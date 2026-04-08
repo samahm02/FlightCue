@@ -1,0 +1,108 @@
+{
+  "model_type": "gru",
+  "export_event": "TAKEOFF",
+  "target_event": "takeoff",
+  "head_index": 0,
+  "threshold": 0.5174179572881711,
+  "trigger_k": 2,
+  "scaler_fit_mode": "unique_windows",
+  "seq_len": 25,
+  "label_shift": 0,
+  "label_idx": 12,
+  "n_features": 154,
+  "timing_columns": {
+    "order_col": "t_end",
+    "detect_time_col": "t_end",
+    "label_time_col": "t_anchor"
+  },
+  "timing": {
+    "hop_s": 25.0,
+    "win_len_s": 25.0,
+    "future_windows": 12
+  },
+  "event_focused_training": {
+    "primary_oversample": 0,
+    "oversample_factor": 0,
+    "main_loss_weight": 1.0,
+    "aux_loss_weight": 0.0,
+    "early_stop_metric": "val_pr_auc_primary"
+  },
+  "thresholds_from_val": {
+    "takeoff_thr": 0.5174179572881711,
+    "landing_thr": 0.0
+  },
+  "use_temperature_scaling": false,
+  "calibration_temperature": 1.0,
+  "metrics_pytorch": {
+    "val": {
+      "takeoff": {
+        "pr_auc": 0.7090724428630735,
+        "roc_auc": 0.9889156023720667,
+        "threshold": 0.5174179572881711,
+        "TP": 83,
+        "FN": 43,
+        "FP": 30,
+        "TN": 13993,
+        "precision": 0.7345132743362832,
+        "recall": 0.6587301587301587,
+        "f1": 0.6945606694555685,
+        "fbeta": 0.6726094003239621
+      },
+      "landing": {
+        "pr_auc": 0.0,
+        "roc_auc": 0.5,
+        "threshold": 0.0,
+        "TP": 0,
+        "FN": 0,
+        "FP": 0,
+        "TN": 0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "fbeta": 0.0
+      }
+    },
+    "test": {
+      "takeoff": {
+        "pr_auc": 0.770072583378927,
+        "roc_auc": 0.9887482410947729,
+        "threshold": 0.5174179572881711,
+        "TP": 115,
+        "FN": 68,
+        "FP": 22,
+        "TN": 28164,
+        "precision": 0.8394160583941606,
+        "recall": 0.6284153005464481,
+        "f1": 0.7187499999995103,
+        "fbeta": 0.6616800920596729
+      },
+      "landing": {
+        "pr_auc": 0.0,
+        "roc_auc": 0.5,
+        "threshold": 0.0,
+        "TP": 0,
+        "FN": 0,
+        "FP": 0,
+        "TN": 0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "fbeta": 0.0
+      }
+    }
+  },
+  "onnx": {
+    "input_name": "x",
+    "output_name": "p",
+    "output_is_probability": true,
+    "opset_requested": 18,
+    "opset_actual": 18,
+    "static_batch": 1
+  },
+  "onnx_parity": {
+    "golden_rows": 32,
+    "max_abs_diff": null,
+    "warn_if_gt": 0.02,
+    "status": "unknown"
+  }
+}

@@ -8,6 +8,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.flightcue.data.replay.ReplayRepository
 import com.example.flightcue.data.replay.ReplayRunner
 import com.example.flightcue.data.replay.ReplaySummary
+import com.example.flightcue.service.FlightDetectionService
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -16,6 +17,11 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+// ReplayViewModel.kt
+// ViewModel for the replay screen.
+// Manages file selection, runs ReplayRunner on a background thread, and exposes
+// progress and results to the UI via StateFlow.
 
 class ReplayViewModel(app: Application) : AndroidViewModel(app) {
 
@@ -51,6 +57,9 @@ class ReplayViewModel(app: Application) : AndroidViewModel(app) {
     fun clearSummary() { _summary.value = null }
 
     fun open(uri: Uri) {
+        // Stop live detection before running replay
+        FlightDetectionService.stop(getApplication())
+
         _fileUri.value = uri
         _fileName.value = null
         clearMessages()
@@ -58,7 +67,6 @@ class ReplayViewModel(app: Application) : AndroidViewModel(app) {
         _progress.value = 0f
         _progressText.value = ""
 
-        // Resolve display name in background
         viewModelScope.launch {
             val name = resolveDisplayName(uri)
             _fileName.value = name
@@ -93,7 +101,6 @@ class ReplayViewModel(app: Application) : AndroidViewModel(app) {
                 // 2) Heavy ML work (CPU) + real progress from ReplayRunner
                 val sum = withContext(Dispatchers.Default) {
                     runner.runFast(src) { frac ->
-                        // Map 0..1 from runner to 10%..100% in UI
                         val mapped = 0.1f + 0.9f * frac.toFloat()
                         _progress.value = mapped.coerceIn(0f, 1f)
                     }

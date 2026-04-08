@@ -1,29 +1,108 @@
 package com.example.flightcue.domain.timeseries
 
-// Simple ring buffers for raw sensor streams (timestamps in seconds since boot).
-class AccelBuffer(private val cap: Int = 60 * 60 * 120) {
-    private val t=DoubleArray(cap); private val ax=DoubleArray(cap); private val ay=DoubleArray(cap); private val az=DoubleArray(cap)
-    private var n=0; private var head=0
-    fun push(ts: Double, x: Double, y: Double, z: Double) {
-        t[head]=ts; ax[head]=x; ay[head]=y; az[head]=z; head=(head+1)%cap; n=minOf(cap,n+1)
+class AccelBuffer(private val cap: Int = 20_000) {   // 100s × 200Hz max device rate
+    private val lock = Any()
+    private val t  = DoubleArray(cap)
+    private val ax = DoubleArray(cap)
+    private val ay = DoubleArray(cap)
+    private val az = DoubleArray(cap)
+    private var n = 0; private var head = 0
+
+    fun push(ts: Double, x: Double, y: Double, z: Double) = synchronized(lock) {
+        t[head] = ts; ax[head] = x; ay[head] = y; az[head] = z
+        head = (head + 1) % cap
+        n = minOf(cap, n + 1)
     }
-    fun snapshot(): AccelSlice {
-        val outN=n; val outT=DoubleArray(outN); val outX=DoubleArray(outN); val outY=DoubleArray(outN); val outZ=DoubleArray(outN)
-        val start=(head-outN+cap)%cap
-        for (i in 0 until outN) { val idx=(start+i)%cap; outT[i]=t[idx]; outX[i]=ax[idx]; outY[i]=ay[idx]; outZ[i]=az[idx] }
-        return AccelSlice(outT,outX,outY,outZ)
+
+    fun snapshotSince(minTs: Double): AccelSlice = synchronized(lock) {
+        if (n == 0) return@synchronized AccelSlice(
+            DoubleArray(0), DoubleArray(0), DoubleArray(0), DoubleArray(0)
+        )
+        val start = (head - n + cap) % cap
+
+        var i0 = 0
+        while (i0 < n) {
+            if (t[(start + i0) % cap] >= minTs) break
+            i0++
+        }
+        val m = n - i0
+        if (m <= 0) return@synchronized AccelSlice(
+            DoubleArray(0), DoubleArray(0), DoubleArray(0), DoubleArray(0)
+        )
+
+        val outT = DoubleArray(m)
+        val outX = DoubleArray(m); val outY = DoubleArray(m); val outZ = DoubleArray(m)
+        for (j in 0 until m) {
+            val idx = (start + i0 + j) % cap
+            outT[j] = t[idx]; outX[j] = ax[idx]; outY[j] = ay[idx]; outZ[j] = az[idx]
+        }
+
+        // FIX: match Python's sort_values("t") — sort by timestamp before returning
+        sortByTimestamp(outT, outX, outY, outZ, m)
+
+        AccelSlice(outT, outX, outY, outZ)
+    }
+
+    private fun sortByTimestamp(t: DoubleArray, x: DoubleArray, y: DoubleArray, z: DoubleArray, n: Int) {
+        // Insertion sort: O(n) when nearly sorted (out-of-order is rare per Jonas)
+        for (i in 1 until n) {
+            val ti = t[i]; val xi = x[i]; val yi = y[i]; val zi = z[i]
+            var j = i - 1
+            while (j >= 0 && t[j] > ti) {
+                t[j + 1] = t[j]; x[j + 1] = x[j]; y[j + 1] = y[j]; z[j + 1] = z[j]
+                j--
+            }
+            t[j + 1] = ti; x[j + 1] = xi; y[j + 1] = yi; z[j + 1] = zi
+        }
     }
 }
-class BaroBuffer(private val cap: Int = 60 * 60 * 10) {
-    private val t=DoubleArray(cap); private val p=DoubleArray(cap)
-    private var n=0; private var head=0
-    fun push(ts: Double, pressureHpa: Double) { t[head]=ts; p[head]=pressureHpa; head=(head+1)%cap; n=minOf(cap,n+1) }
-    fun snapshot(): BaroSlice {
-        val outN=n; val outT=DoubleArray(outN); val outP=DoubleArray(outN)
-        val start=(head-outN+cap)%cap
-        for (i in 0 until outN) { val idx=(start+i)%cap; outT[i]=t[idx]; outP[i]=p[idx] }
-        return BaroSlice(outT,outP)
+
+class BaroBuffer(private val cap: Int = 4_000) {     // 160s × 25Hz max device rate
+    private val lock = Any()
+    private val t = DoubleArray(cap); private val p = DoubleArray(cap)
+    private var n = 0; private var head = 0
+
+    fun push(ts: Double, pressureHpa: Double) = synchronized(lock) {
+        t[head] = ts; p[head] = pressureHpa
+        head = (head + 1) % cap
+        n = minOf(cap, n + 1)
+    }
+
+    fun snapshotSince(minTs: Double): BaroSlice = synchronized(lock) {
+        if (n == 0) return@synchronized BaroSlice(DoubleArray(0), DoubleArray(0))
+        val start = (head - n + cap) % cap
+
+        var i0 = 0
+        while (i0 < n) {
+            if (t[(start + i0) % cap] >= minTs) break
+            i0++
+        }
+        val m = n - i0
+        if (m <= 0) return@synchronized BaroSlice(DoubleArray(0), DoubleArray(0))
+
+        val outT = DoubleArray(m); val outP = DoubleArray(m)
+        for (j in 0 until m) {
+            val idx = (start + i0 + j) % cap
+            outT[j] = t[idx]; outP[j] = p[idx]
+        }
+
+        // FIX: match Python's sort_values("t")
+        sortByTimestamp(outT, outP, m)
+
+        BaroSlice(outT, outP)
+    }
+
+    private fun sortByTimestamp(t: DoubleArray, p: DoubleArray, n: Int) {
+        for (i in 1 until n) {
+            val ti = t[i]; val pi = p[i]
+            var j = i - 1
+            while (j >= 0 && t[j] > ti) {
+                t[j + 1] = t[j]; p[j + 1] = p[j]; j--
+            }
+            t[j + 1] = ti; p[j + 1] = pi
+        }
     }
 }
+
 data class AccelSlice(val t: DoubleArray, val ax: DoubleArray, val ay: DoubleArray, val az: DoubleArray)
 data class BaroSlice (val t: DoubleArray, val p: DoubleArray)

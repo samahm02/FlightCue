@@ -8,18 +8,20 @@ object Params {
     const val BIG_GAP_FACTOR = 5.0
 
     // training-only knobs we keep identical (for feature parity)
-    const val COVERAGE = 0.90
-    const val WINDOW_ANCHOR_RIGHT = true
+    //const val COVERAGE = 0.90
+    //const val WINDOW_ANCHOR_RIGHT = true
     const val DO_PSD = true
-    const val ROBUST_PER_FLIGHT = true
+    //const val ROBUST_PER_FLIGHT = true
     // com.example.flightcue.domain.util.Params
-    const val RUN_PARITY_AT_START = false
+    const val RUN_PARITY_AT_START = true
+
+    //const val ROBUST_TAU_S: Double = 120.0
 
 
     // windows (right-anchored), identical to preprocessor
-    const val WIN = 10.0; const val HOP = 7.0
-    const val WIN_TO = 20.0; const val HOP_TO = 10.0
-    const val WIN_LD = 24.0; const val HOP_LD = 12.0
+    //const val WIN = 10.0; const val HOP = 7.0
+   // const val WIN_TO = 20.0; const val HOP_TO = 10.0
+    //const val WIN_LD = 24.0; const val HOP_LD = 12.0
 
     // stream filters (match script)
     const val GRAV_TAU_S = 0.6
@@ -37,4 +39,12 @@ object Params {
     const val ENABLE_MEDIAN_WARMUP = false  // flip to true when diagnosing model IO
     const val LOG_SENSOR_RATES = false       // set true temporarily when you want to verify real Hz
 
+
+    // Detection trigger settings (match Python training: --cooldown_s 60 --trigger_k 2)
+    const val COOLDOWN_SEC = 60.0
+    const val MIN_SEP_SEC  = 60.0
+
+
+    // Params.kt - add:
+    const val SENSOR_BATCH_SEC = 5  // buffer up to 5s of samples in hardware FIFO
 }

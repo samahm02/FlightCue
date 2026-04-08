@@ -20,34 +20,39 @@ class FlightStateMachine(
     private var lastEventSec: Double = Double.NEGATIVE_INFINITY
 
     fun onTakeoffScore(p: Double, edgeSec: Double): FlightDomainEvent? {
-        if (state == FlightState.NotFlying &&
-            toTrigger.update(p, edgeSec) &&
-            (edgeSec - lastEventSec) >= minSepSec
-        ) {
+        if (state != FlightState.NotFlying) return null
+        if ((edgeSec - lastEventSec) < minSepSec) return null
+
+        if (toTrigger.update(p, edgeSec)) {
             state = FlightState.Flying
             lastEventSec = edgeSec
-            val ev = FlightDomainEvent.FlightStarted(edgeSec,p)
-            publisher.setState(state); publisher.publish(ev)
+            ldTrigger.reset()
+
+            val ev = FlightDomainEvent.FlightStarted(edgeSec, p)
+            publisher.setState(state)
+            publisher.publish(ev)
             return ev
         }
         return null
     }
 
     fun onLandingScore(p: Double, edgeSec: Double): FlightDomainEvent? {
-        if (state == FlightState.Flying &&
-            ldTrigger.update(p, edgeSec) &&
-            (edgeSec - lastEventSec) >= minSepSec
-        ) {
+        if (state != FlightState.Flying) return null
+        if ((edgeSec - lastEventSec) < minSepSec) return null
+
+        if (ldTrigger.update(p, edgeSec)) {
             state = FlightState.NotFlying
             lastEventSec = edgeSec
-            val ev = FlightDomainEvent.FlightEnded(edgeSec,p)
-            publisher.setState(state); publisher.publish(ev)
+            toTrigger.reset()
+
+            val ev = FlightDomainEvent.FlightEnded(edgeSec, p)
+            publisher.setState(state)
+            publisher.publish(ev)
             return ev
         }
         return null
     }
 
-    // in FlightStateMachine.kt
     fun resetToNotFlying(nowSec: Double = Double.NEGATIVE_INFINITY) {
         state = FlightState.NotFlying
         lastEventSec = nowSec
@@ -55,5 +60,4 @@ class FlightStateMachine(
         toTrigger.reset()
         ldTrigger.reset()
     }
-
 }

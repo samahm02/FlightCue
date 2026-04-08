@@ -13,6 +13,7 @@ import com.example.flightcue.domain.events.AppBus
 import com.example.flightcue.domain.events.EventMode
 import com.example.flightcue.domain.events.FlightDomainEvent
 import com.example.flightcue.domain.events.FlightState
+import com.example.flightcue.service.FlightDetectionService
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
@@ -25,6 +26,10 @@ class DetectionViewModel(app: Application) : AndroidViewModel(app) {
             started = SharingStarted.WhileSubscribed(5_000),
             initialValue = true
         )
+
+    fun startService() {
+        FlightDetectionService.start(getApplication())
+    }
 
     val flightState: StateFlow<FlightState> =
         AppBus.state.stateIn(

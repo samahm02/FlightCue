@@ -18,8 +18,7 @@
         android:name="android.permission.POST_NOTIFICATIONS"
         tools:targetApi="33" />
 
-    <!-- Optional: advertise required/optional hardware.
-         Keep barometer optional so devices without it can still run (landing disabled gracefully). -->
+    <!-- Optional: advertise required hardware. -->
     <uses-feature android:name="android.hardware.sensor.accelerometer" android:required="true"/>
     <uses-feature android:name="android.hardware.sensor.barometer" android:required="true"/>
 
@@ -32,6 +31,8 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.FlightCue">
+
+
 
         <activity
             android:name=".MainActivity"
