@@ -27,6 +27,8 @@ import kotlinx.coroutines.flow.StateFlow
 import java.util.Locale
 import kotlin.math.ln
 import kotlin.math.round
+import com.example.flightcue.domain.events.EventMode
+
 
 /**
  * FlightDetector is the domain-layer core for on-device flight event detection.
@@ -393,6 +395,99 @@ class FlightDetector(
         toInferenceCount = 0
         toSched.setOrigin(decisionTimeSec)
         if (debugEnabled) Log.i(TAG, "Armed TAKEOFF pipeline from originSec=${fmt2(decisionTimeSec)}")
+    }
+
+    /**
+     * Force transition into Flying from the detector core.
+     *
+     * This is the correct path for manual takeoff:
+     * - updates authoritative FSM state
+     * - mirrors state/event outward through publisher/AppBus
+     * - rearms LANDING so the next phase must build a fresh sequence
+     */
+    fun forceFlightStarted(
+        atSec: Double,
+        confidence: Double = 1.0,
+        mode: EventMode = EventMode.FORCED,
+        publishEvent: Boolean = true
+    ): FlightDomainEvent? {
+        ensureOrigins(atSec)
+
+        val ev = fsm.forceFlightStarted(
+            atSec = atSec,
+            confidence = confidence,
+            mode = mode,
+            publishEvent = publishEvent
+        )
+
+        if (ev != null) {
+            armLandingFrom(atSec)
+            if (debugEnabled) {
+                Log.i(TAG, "Forced TAKEOFF applied atSec=${fmt2(atSec)}")
+            }
+        }
+
+        return ev
+    }
+
+    /**
+     * Force transition into NotFlying from the detector core.
+     *
+     * This is the correct path for manual landing:
+     * - updates authoritative FSM state
+     * - mirrors state/event outward through publisher/AppBus
+     * - rearms TAKEOFF so the next phase must build a fresh sequence
+     */
+    fun forceFlightEnded(
+        atSec: Double,
+        confidence: Double = 1.0,
+        mode: EventMode = EventMode.FORCED,
+        publishEvent: Boolean = true
+    ): FlightDomainEvent? {
+        ensureOrigins(atSec)
+
+        val ev = fsm.forceFlightEnded(
+            atSec = atSec,
+            confidence = confidence,
+            mode = mode,
+            publishEvent = publishEvent
+        )
+
+        if (ev != null) {
+            armTakeoffFrom(atSec)
+            if (debugEnabled) {
+                Log.i(TAG, "Forced LANDING applied atSec=${fmt2(atSec)}")
+            }
+        }
+
+        return ev
+    }
+
+    /**
+     * Restore authoritative detector state without emitting a new event.
+     *
+     * Used when the service/process is recreated and we want the detector
+     * to continue from a known phase.
+     */
+    fun restoreState(state: FlightState, nowSec: Double) {
+        ensureOrigins(nowSec)
+
+        fsm.restoreState(state, nowSec)
+
+        when (state) {
+            FlightState.NotFlying -> {
+                armTakeoffFrom(nowSec)
+                if (debugEnabled) {
+                    Log.i(TAG, "Restored detector state = NotFlying atSec=${fmt2(nowSec)}")
+                }
+            }
+            FlightState.Flying -> {
+                armLandingFrom(nowSec)
+                if (debugEnabled) {
+                    Log.i(TAG, "Restored detector state = Flying atSec=${fmt2(nowSec)}")
+                }
+            }
+        }
     }
 
     /**
@@ -803,6 +898,8 @@ class FlightDetector(
             cut(bd.pEma30), cut(bd.pEma30dt1)
         )
     }
+
+
 
     /** Align a Map<String, Double> into a dense feature vector ordered by schema names. */
     private fun alignRaw(feats: Map<String, Double>, names: List<String>): DoubleArray =

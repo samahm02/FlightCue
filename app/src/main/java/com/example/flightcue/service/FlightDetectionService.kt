@@ -1,4 +1,3 @@
-// file: app/src/main/java/com/example/flightcue/service/FlightDetectionService.kt
 package com.example.flightcue.service
 
 import android.app.Notification
@@ -18,16 +17,6 @@ import androidx.core.content.ContextCompat
 import com.example.flightcue.MainActivity
 import com.example.flightcue.data.detection.DetectionEngine
 
-/**
- * Foreground service that keeps DetectionEngine alive in the background.
- *
- * - Runs by default when SettingsStore.detectionEnabled == true
- * - Can be stopped fully (engine + sensors + ticker + notification removed)
- *
- * NOTE:
- * On Android 13+ if user denies POST_NOTIFICATIONS, the service can still run,
- * but the user may not see the notification/event notifications.
- */
 class FlightDetectionService : Service() {
 
     private var started = false
@@ -47,17 +36,24 @@ class FlightDetectionService : Service() {
                 stopSelf()
                 return START_NOT_STICKY
             }
+
+            ACTION_FORCE_TAKEOFF -> {
+                ensureStarted()
+                engine?.forceTakeoff()
+                Log.i(TAG, "FORCE_TAKEOFF requested")
+                return START_STICKY
+            }
+
+            ACTION_FORCE_LANDING -> {
+                ensureStarted()
+                engine?.forceLanding()
+                Log.i(TAG, "FORCE_LANDING requested")
+                return START_STICKY
+            }
+
             else -> {
-                if (!started) {
-                    started = true
-                    // Must go foreground quickly on API 26+
-                    startForegroundInternal()
-                    engine?.start()
-                    Log.i(TAG, "Started (foreground + engine)")
-                } else {
-                    // idempotent
-                    Log.i(TAG, "Already started")
-                }
+                ensureStarted()
+                Log.i(TAG, "Started (foreground + engine)")
                 return START_STICKY
             }
         }
@@ -70,6 +66,17 @@ class FlightDetectionService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    private fun ensureStarted() {
+        if (started) {
+            Log.i(TAG, "Already started")
+            return
+        }
+
+        started = true
+        startForegroundInternal()
+        engine?.start()
+    }
+
     private fun stopEverything(reason: String) {
         if (!started && engine == null) return
 
@@ -79,22 +86,26 @@ class FlightDetectionService : Service() {
         engine = null
         started = false
 
-        // Remove foreground notification
-        runCatching { ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE) }
+        runCatching {
+            ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+        }
     }
 
     private fun startForegroundInternal() {
         val notif = buildOngoingNotification()
 
-        // Match manifest android:foregroundServiceType="health"
         val fgsType =
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) ServiceInfo.FOREGROUND_SERVICE_TYPE_HEALTH else 0
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_HEALTH
+            } else {
+                0
+            }
 
         ServiceCompat.startForeground(
-            /* service = */ this,
-            /* id = */ ONGOING_NOTIFICATION_ID,
-            /* notification = */ notif,
-            /* foregroundServiceType = */ fgsType
+            this,
+            ONGOING_NOTIFICATION_ID,
+            notif,
+            fgsType
         )
     }
 
@@ -105,12 +116,16 @@ class FlightDetectionService : Service() {
 
         val pendingFlags =
             PendingIntent.FLAG_UPDATE_CURRENT or
-                    (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0)
+                    (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                        PendingIntent.FLAG_IMMUTABLE
+                    } else {
+                        0
+                    })
 
         val pending = PendingIntent.getActivity(this, 0, tapIntent, pendingFlags)
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_menu_compass) // TODO replace with app icon
+            .setSmallIcon(android.R.drawable.ic_menu_compass)
             .setContentTitle("FlightCue running")
             .setContentText("Monitoring sensors for flight detection")
             .setContentIntent(pending)
@@ -140,23 +155,41 @@ class FlightDetectionService : Service() {
         private const val ONGOING_NOTIFICATION_ID = 3001
 
         private const val ACTION_STOP = "com.example.flightcue.action.DETECTION_STOP"
+        private const val ACTION_FORCE_TAKEOFF = "com.example.flightcue.action.FORCE_TAKEOFF"
+        private const val ACTION_FORCE_LANDING = "com.example.flightcue.action.FORCE_LANDING"
 
-        /** Start (or keep running). Safe to call repeatedly. */
+        /** Start or keep running. */
         fun start(context: Context) {
             val i = Intent(context, FlightDetectionService::class.java)
             ContextCompat.startForegroundService(context, i)
         }
 
-        /** Hard stop (engine + sensors + ticker + notification removed). */
+        /** Manual force: takeoff. */
+        fun forceTakeoff(context: Context) {
+            val i = Intent(context, FlightDetectionService::class.java).apply {
+                action = ACTION_FORCE_TAKEOFF
+            }
+            ContextCompat.startForegroundService(context, i)
+        }
+
+        /** Manual force: landing. */
+        fun forceLanding(context: Context) {
+            val i = Intent(context, FlightDetectionService::class.java).apply {
+                action = ACTION_FORCE_LANDING
+            }
+            ContextCompat.startForegroundService(context, i)
+        }
+
+        /** Hard stop. */
         fun stop(context: Context) {
-            // stopService does not require us to "startForegroundService" first.
             context.stopService(Intent(context, FlightDetectionService::class.java))
         }
 
-        /** Optional: stop via explicit action (only safe if service is already running). */
+        /** Optional explicit stop action if already running. */
         fun requestStopAction(context: Context) {
-            val i = Intent(context, FlightDetectionService::class.java).apply { action = ACTION_STOP }
-            // Use startService so we don't trigger the "must call startForeground" rule if service isn't running.
+            val i = Intent(context, FlightDetectionService::class.java).apply {
+                action = ACTION_STOP
+            }
             context.startService(i)
         }
     }

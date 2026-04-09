@@ -6,7 +6,6 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ApplicationInfo
-import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.Looper
@@ -22,7 +21,6 @@ import com.example.flightcue.domain.events.AppBus
 import com.example.flightcue.domain.events.EventMode
 import com.example.flightcue.domain.events.FlightDomainEvent
 import com.example.flightcue.domain.events.FlightIntents
-import com.example.flightcue.domain.events.FlightState
 import com.example.flightcue.domain.util.Params
 import com.example.flightcue.ml.OnnxPredictor
 import com.example.flightcue.ml.OrtSessionManager
@@ -109,7 +107,7 @@ class DetectionEngine(private val appContext: Context) {
                     context = appContext,
                     predictor = predictor,
                     eventPublisher = AppBus,
-                    debug = debugLogs, // ✅ dev-only logs inside FlightDetector
+                    debug = debugLogs,
                     overrides = FlightDetector.Overrides(
                         strictHopParity = true,
                         windowLogsEnabled = true,
@@ -129,7 +127,10 @@ class DetectionEngine(private val appContext: Context) {
                 live = liveLocal
                 sensorHub = hub
 
-                eventLogWriter = EventLogWriter(appContext = appContext, events = AppBus.events).also { it.start() }
+                eventLogWriter = EventLogWriter(
+                    appContext = appContext,
+                    events = AppBus.events
+                ).also { it.start() }
 
                 Log.i(TAG, "Core ready (live + sensorHub). debugLogs=$debugLogs")
                 true
@@ -139,7 +140,7 @@ class DetectionEngine(private val appContext: Context) {
             }
         }
 
-        // After init: register sensors + start ticker on detector thread
+        // After init: register sensors once + start ticker
         scope.launch {
             val ok = initJob.await()
             if (!ok) {
@@ -148,27 +149,25 @@ class DetectionEngine(private val appContext: Context) {
             }
 
             detectorHandler?.post {
-                sensorHub?.switchForState(AppBus.state.value)
+                // SensorHub now keeps both accel + baro active.
+                // State no longer determines which sensors are registered.
+                sensorHub?.ensureRegistered()
                 startTickerLocked()
-            }
-        }
-
-        // React to state changes
-        scope.launch {
-            val ok = initJob.await()
-            if (!ok) return@launch
-            AppBus.state.collect { s ->
-                detectorHandler?.post { sensorHub?.switchForState(s) }
             }
         }
 
         // Side-effects for all events (AUTO + manual)
         scope.launch {
-            AppBus.events.collect { ev -> handleFlightEvent(ev) }
+            val ok = initJob.await()
+            if (!ok) return@launch
+
+            AppBus.events.collect { ev ->
+                handleFlightEvent(ev)
+            }
         }
 
         // Optional parity runner (dev-only)
-        if (debugLogs && Params.RUN_PARITY_AT_START) {
+        if (debugLogs) {
             scope.launch(Dispatchers.Default) {
                 try {
                     com.example.flightcue.testing.ParityRunner.runAll(appContext)
@@ -191,8 +190,6 @@ class DetectionEngine(private val appContext: Context) {
 
                 val nowSec = SystemClock.elapsedRealtimeNanos() / 1e9
                 live?.reset(nowSec)
-
-                AppBus.setState(FlightState.NotFlying)
             } finally {
                 latch.countDown()
             }
@@ -245,18 +242,49 @@ class DetectionEngine(private val appContext: Context) {
             Log.i(TAG, "Sent broadcast: $action mode=${ev.mode.name} atSec=${"%.1f".format(ev.atSec)}")
         }
     }
+    fun forceTakeoff(confidence: Double = 1.0) {
+        scope.launch {
+            val ok = initJob.await()
+            if (!ok) return@launch
+
+            val atSec = SystemClock.elapsedRealtimeNanos() / 1e9
+            detectorHandler?.post {
+                live?.forceFlightStarted(
+                    atSec = atSec,
+                    confidence = confidence,
+                    mode = EventMode.FORCED,
+                    publishEvent = true
+                )
+            }
+        }
+    }
+
+    fun forceLanding(confidence: Double = 1.0) {
+        scope.launch {
+            val ok = initJob.await()
+            if (!ok) return@launch
+
+            val atSec = SystemClock.elapsedRealtimeNanos() / 1e9
+            detectorHandler?.post {
+                live?.forceFlightEnded(
+                    atSec = atSec,
+                    confidence = confidence,
+                    mode = EventMode.FORCED,
+                    publishEvent = true
+                )
+            }
+        }
+    }
 
     private fun postNotificationForEvent(ev: FlightDomainEvent) {
         val nm = appContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                EVENT_CHANNEL_ID,
-                EVENT_CHANNEL_NAME,
-                NotificationManager.IMPORTANCE_DEFAULT
-            )
-            nm.createNotificationChannel(channel)
-        }
+        val channel = NotificationChannel(
+            EVENT_CHANNEL_ID,
+            EVENT_CHANNEL_NAME,
+            NotificationManager.IMPORTANCE_DEFAULT
+        )
+        nm.createNotificationChannel(channel)
 
         val nowMs = System.currentTimeMillis()
         val timeStr = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(nowMs))
@@ -278,7 +306,7 @@ class DetectionEngine(private val appContext: Context) {
 
         val pendingFlags =
             PendingIntent.FLAG_UPDATE_CURRENT or
-                    (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0)
+                    (PendingIntent.FLAG_IMMUTABLE)
 
         val pending = PendingIntent.getActivity(appContext, 0, tapIntent, pendingFlags)
 

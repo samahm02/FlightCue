@@ -47,21 +47,17 @@ class SensorHub(
     }
 
     /**
-     * Your schema uses accel+baro features for BOTH events.
-     * Therefore, we keep ACCEL always on and BARO on if available.
+     * Registers the sensors needed by the detector exactly once.
      *
-     * Idempotent.
+     * The ML pipeline uses both accelerometer and barometer features for both events,
+     * so sensor registration is not state-dependent.
+     *
      */
-    fun switchForState(@Suppress("UNUSED_PARAMETER") state: FlightState) {
+    fun ensureRegistered() {
         if (registered) return
 
         startAccel(Params.ACCEL_HZ, batchSec = Params.SENSOR_BATCH_SEC)
-
-        if (baro == null) {
-            Log.w(TAG, "No barometer sensor available; baro features will degrade to medians.")
-        } else {
-            startBaro(Params.BARO_HZ, batchSec = Params.SENSOR_BATCH_SEC)
-        }
+        startBaro(Params.BARO_HZ, batchSec = Params.SENSOR_BATCH_SEC)
 
         registered = true
         Log.i(TAG, "Sensors registered (accel=${accel != null}, baro=${baro != null})")

@@ -45,19 +45,13 @@ class DetectionViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setEnabled(v: Boolean) = viewModelScope.launch { settings.setDetectionEnabled(v) }
 
-    /** Force toggle the current state and emit a FORCED event for history/logging. */
-    fun forceToggle() = viewModelScope.launch {
-        val nowSec = SystemClock.elapsedRealtime() / 1000.0
+    fun forceToggle() {
         when (flightState.value) {
             FlightState.NotFlying -> {
-                // User says: we already took off.
-                AppBus.publish(FlightDomainEvent.FlightStarted(nowSec, confidence = 1.0, mode = EventMode.FORCED))
-                AppBus.setState(FlightState.Flying)
+                FlightDetectionService.forceTakeoff(getApplication())
             }
             FlightState.Flying -> {
-                // User says: we have landed.
-                AppBus.publish(FlightDomainEvent.FlightEnded(nowSec, confidence = 1.0, mode = EventMode.FORCED))
-                AppBus.setState(FlightState.NotFlying)
+                FlightDetectionService.forceLanding(getApplication())
             }
         }
     }
