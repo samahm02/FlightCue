@@ -14,69 +14,68 @@ import com.example.flightcue.data.modelspec.ModelProfile
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
-import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.max
 
 private const val TAG = "OrtSessionManager"
 
+/**
+ * Singleton that owns both ONNX sessions (takeoff and landing).
+ *
+ * Call [init] once (e.g. from ["DetectionEngine"]) before any scoring.
+ * Sessions and the ORT environment are kept alive for the lifetime of the process.
+ * All public scoring functions are safe to call from any thread.
+ */
 object OrtSessionManager {
 
     @Volatile private var env: OrtEnvironment? = null
     @Volatile private var takeoff: Bundle? = null
     @Volatile private var landing: Bundle? = null
-    private val warmedUpOnce = AtomicBoolean(false)
-
+    /**
+     * All parsed artifacts for one model direction, cached after [init].
+     * Avoids re-parsing asset files on every inference call.
+     */
+    @Suppress("ArrayInDataClass")
     data class Bundle(
         val event: String,
         val dir: String,
         val session: OrtSession,
         val inputName: String,
         val outputName: String?,
-        val outputIndex: Int,      // ✅ cached once
+        val outputIndex: Int,
         val schema: FeatureSchema,
-        val scalerMean: DoubleArray,   // (kept for compatibility / debugging)
-        val scalerScale: DoubleArray,  // (kept for compatibility / debugging)
+        val scalerMean: DoubleArray,
+        val scalerScale: DoubleArray,
         val profile: ModelProfile,
-        val shape3d: LongArray     // ✅ cached once: [1, seqLen, nFeat]
+        val shape3d: LongArray         // [1, seqLen, nFeat] — cached to avoid allocation per call
     )
 
-    fun getInstance(@Suppress("UNUSED_PARAMETER") ctx: Context): OrtSessionManager = this
-
-    // -------------------------
-    // Reusable direct buffers (per thread)
-    // -------------------------
+    // ---- Per-thread reusable direct buffers ----
+    // Avoids allocating a new FloatArray on every inference call.
 
     private class TensorScratch(
-        var bb: ByteBuffer,
         var fb: FloatBuffer,
         var capFloats: Int
     )
 
     private val scratchLocal = ThreadLocal<TensorScratch>()
 
-    /** Ensure a per-thread Direct buffer that can hold at least nFloats floats. */
+    /** Returns a per-thread direct FloatBuffer large enough for [nFloats] floats. */
     private fun scratch(nFloats: Int): TensorScratch {
         val cur = scratchLocal.get()
         if (cur == null || cur.capFloats < nFloats) {
-            val newCap = if (cur == null) {
-                nFloats
-            } else {
-                // grow geometrically to reduce future native allocs
-                max(nFloats, cur.capFloats * 2)
-            }
-
-            val bb = ByteBuffer
+            val newCap = if (cur == null) nFloats else max(nFloats, cur.capFloats * 2)
+            val fb = ByteBuffer
                 .allocateDirect(newCap * 4)
                 .order(ByteOrder.nativeOrder())
-
-            val fb = bb.asFloatBuffer()
-            val ns = TensorScratch(bb, fb, newCap)
+                .asFloatBuffer()
+            val ns = TensorScratch(fb, newCap)
             scratchLocal.set(ns)
             return ns
         }
         return cur
     }
 
+    /** Loads both ONNX sessions from assets. No-op if already initialised. */
     @Synchronized
     fun init(context: Context) {
         if (env != null && takeoff != null && landing != null) {
@@ -87,91 +86,75 @@ object OrtSessionManager {
         val e = OrtEnvironment.getEnvironment()
         env = e
 
-        // TAKEOFF
+        // TAKEOFF session
         run {
-            val schema = ModelConfigs.parseFeatures(context, isTakeoff = true)
+            val schema  = ModelConfigs.parseFeatures(context, isTakeoff = true)
             val (mean, scale) = ModelConfigs.parseScaler(context, schema, isTakeoff = true)
             val profile = ModelConfigs.parseProfile(context, isTakeoff = true)
+            val sess    = createSessionFromAssets(context, AppPaths.TAKEOFF_DIR)
 
-            val sess = createSessionFromAssets(context, AppPaths.TAKEOFF_DIR)
-
-            val input = profile.onnxInputName ?: firstInputName(sess)
-            val out = profile.onnxOutputName
+            val input  = profile.onnxInputName ?: firstInputName(sess)
+            val out    = profile.onnxOutputName
+            val nFeat  = schema.names.size
 
             require(schema.names.isNotEmpty()) { "TAKEOFF: empty schema.names" }
             require(profile.seqLen > 0) { "TAKEOFF: invalid seqLen=${profile.seqLen}" }
 
-            val nFeat = schema.names.size
             if (profile.nFeatures > 0 && profile.nFeatures != nFeat) {
                 throw IllegalStateException("TAKEOFF: profile.nFeatures=${profile.nFeatures} != schema.names.size=$nFeat")
             }
 
             validateInputShape(sess, input, expectedSeqLen = profile.seqLen, expectedNFeat = nFeat, event = "TAKEOFF")
 
+            val outIdx  = resolveOutputIndex(sess, out, "TAKEOFF")
             val shape3d = longArrayOf(1L, profile.seqLen.toLong(), nFeat.toLong())
-            val outIdx = resolveOutputIndex(sess, out, "TAKEOFF")
 
             takeoff = Bundle(
-                event = "TAKEOFF",
-                dir = AppPaths.TAKEOFF_DIR,
-                session = sess,
-                inputName = input,
-                outputName = out,
-                outputIndex = outIdx,
-                schema = schema,
-                scalerMean = mean,
-                scalerScale = scale,
-                profile = profile,
-                shape3d = shape3d
+                event = "TAKEOFF", dir = AppPaths.TAKEOFF_DIR,
+                session = sess, inputName = input, outputName = out,
+                outputIndex = outIdx, schema = schema,
+                scalerMean = mean, scalerScale = scale,
+                profile = profile, shape3d = shape3d
             )
-
             Log.i(TAG, "TAKEOFF: session ready. input=$input, output=${out ?: "first"}, outIdx=$outIdx, seq_len=${profile.seqLen}, features=$nFeat")
         }
 
-        // LANDING
+        // LANDING session
         run {
-            val schema = ModelConfigs.parseFeatures(context, isTakeoff = false)
+            val schema  = ModelConfigs.parseFeatures(context, isTakeoff = false)
             val (mean, scale) = ModelConfigs.parseScaler(context, schema, isTakeoff = false)
             val profile = ModelConfigs.parseProfile(context, isTakeoff = false)
-            val sess = createSessionFromAssets(context, AppPaths.LANDING_DIR)
+            val sess    = createSessionFromAssets(context, AppPaths.LANDING_DIR)
 
-            val input = profile.onnxInputName ?: firstInputName(sess)
-            val out = profile.onnxOutputName
+            val input  = profile.onnxInputName ?: firstInputName(sess)
+            val out    = profile.onnxOutputName
+            val nFeat  = schema.names.size
 
             require(schema.names.isNotEmpty()) { "LANDING: empty schema.names" }
             require(profile.seqLen > 0) { "LANDING: invalid seqLen=${profile.seqLen}" }
 
-            val nFeat = schema.names.size
             if (profile.nFeatures > 0 && profile.nFeatures != nFeat) {
                 throw IllegalStateException("LANDING: profile.nFeatures=${profile.nFeatures} != schema.names.size=$nFeat")
             }
 
             validateInputShape(sess, input, expectedSeqLen = profile.seqLen, expectedNFeat = nFeat, event = "LANDING")
 
+            val outIdx  = resolveOutputIndex(sess, out, "LANDING")
             val shape3d = longArrayOf(1L, profile.seqLen.toLong(), nFeat.toLong())
-            val outIdx = resolveOutputIndex(sess, out, "LANDING")
 
             landing = Bundle(
-                event = "LANDING",
-                dir = AppPaths.LANDING_DIR,
-                session = sess,
-                inputName = input,
-                outputName = out,
-                outputIndex = outIdx,
-                schema = schema,
-                scalerMean = mean,
-                scalerScale = scale,
-                profile = profile,
-                shape3d = shape3d
+                event = "LANDING", dir = AppPaths.LANDING_DIR,
+                session = sess, inputName = input, outputName = out,
+                outputIndex = outIdx, schema = schema,
+                scalerMean = mean, scalerScale = scale,
+                profile = profile, shape3d = shape3d
             )
-
             Log.i(TAG, "LANDING: session ready. input=$input, output=${out ?: "first"}, outIdx=$outIdx, seq_len=${profile.seqLen}, features=$nFeat")
         }
     }
 
-    fun isReady(): Boolean = env != null && takeoff != null && landing != null
+    // ---- Public accessors (use these instead of re-parsing ModelConfigs) ----
 
-    // ✅ PUBLIC ACCESSORS: Use these instead of re-parsing ModelConfigs
     fun featureNamesTakeoff(): List<String> = (takeoff ?: notReady("TAKEOFF")).schema.names
     fun featureNamesLanding(): List<String> = (landing ?: notReady("LANDING")).schema.names
 
@@ -186,21 +169,21 @@ object OrtSessionManager {
     fun profileTakeoff(): ModelProfile = (takeoff ?: notReady("TAKEOFF")).profile
     fun profileLanding(): ModelProfile = (landing ?: notReady("LANDING")).profile
 
-    /**
-     * Fast path: avoid allocating FloatArray.
-     * Assumes incoming features are already in the correct space (raw or scaled) per your pipeline.
-     */
+    // ---- Scoring ----
+
+    /** Runs takeoff inference on a flat feature sequence. Returns probability in [0, 1]. */
     fun scoreTakeoff(features: DoubleArray): Double {
         val b = takeoff ?: notReady("TAKEOFF")
         return runSeqFromDouble(b, features).toDouble()
     }
 
+    /** Runs landing inference on a flat feature sequence. Returns probability in [0, 1]. */
     fun scoreLanding(features: DoubleArray): Double {
         val b = landing ?: notReady("LANDING")
         return runSeqFromDouble(b, features).toDouble()
     }
 
-    // Keep these for parity/tests / existing callers
+    /** Float overloads kept for parity tests and existing callers. */
     fun runTakeoffSeq(seqFlat: FloatArray): Float {
         val b = takeoff ?: notReady("TAKEOFF")
         return runSeqFromFloat(b, seqFlat)
@@ -211,64 +194,20 @@ object OrtSessionManager {
         return runSeqFromFloat(b, seqFlat)
     }
 
-    /**
-     * Warm up ONNX runtime by running inference with zero-filled sequences.
-     */
-    fun debugRunOnZeros() {
-        if (!warmedUpOnce.compareAndSet(false, true)) {
-            Log.d(TAG, "debugRunOnZeros() skipped (already ran)")
-            return
-        }
-
-        takeoff?.let { b ->
-            val seq = createZeroSeq(b)
-            val p = runSeqFromFloat(b, seq)
-            Log.i(TAG, "TAKEOFF warmup (zeros) => p=$p (expected ~0.5 for calibrated model)")
-        }
-
-        landing?.let { b ->
-            val seq = createZeroSeq(b)
-            val p = runSeqFromFloat(b, seq)
-            Log.i(TAG, "LANDING warmup (zeros) => p=$p (expected ~0.5 for calibrated model)")
-        }
-
-        Log.i(TAG, "debugRunOnZeros() finished - ONNX runtime warmed up")
-    }
-
-    private fun createZeroSeq(b: Bundle): FloatArray {
-        val seqLen = b.profile.seqLen
-        val nFeatures = b.schema.names.size
-        return FloatArray(seqLen * nFeatures) { 0.0f }
-    }
-
-    @Synchronized
-    fun close() {
-        takeoff?.session?.close()
-        landing?.session?.close()
-        env?.close()
-        takeoff = null
-        landing = null
-        env = null
-        Log.i(TAG, "Closed ONNX sessions and environment")
-    }
-
-    // ---- internals ----
+    // ---- Private helpers ----
 
     private fun createSessionFromAssets(context: Context, dir: String): OrtSession {
-        val e = env ?: throw IllegalStateException("Environment not ready")
-        val onnxName = pickOneAsset(context, dir, ".onnx")
+        val e = env ?: throw IllegalStateException("ORT environment not ready")
+        val onnxName = pickOnnxAsset(context, dir)
         val bytes = context.assets.open("$dir/$onnxName").use { it.readBytes() }
 
-        // ✅ SessionOptions: Reduces ORT's internal malloc/free churn
         val opts = OrtSession.SessionOptions().apply {
-            setCPUArenaAllocator(true)           // Reuses memory internally
-            setMemoryPatternOptimization(true)   // Pre-allocates when shapes are stable
+            setCPUArenaAllocator(true)           // reuses memory internally
+            setMemoryPatternOptimization(true)   // pre-allocates when shapes are stable
             setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
-            setIntraOpNumThreads(1)              // Single-threaded for mobile
+            setIntraOpNumThreads(1)              // single-threaded for mobile
         }
-        // ✅ ADD THIS ONE LINE:
-        Log.i(TAG, "SessionOptions: arena=true memPattern=true intra=1 inter=1")
-
+        Log.i(TAG, "SessionOptions: arena=true memPattern=true intra=1 opt=ALL ($dir)")
         return e.createSession(bytes, opts)
     }
 
@@ -280,46 +219,37 @@ object OrtSessionManager {
 
     private fun runSeqFromFloat(b: Bundle, seqFlat: FloatArray): Float {
         val seqLen = b.profile.seqLen
-        val nFeat = b.schema.names.size
-
+        val nFeat  = b.schema.names.size
         require(seqFlat.size == seqLen * nFeat) {
             "${b.event}: seqFlat size ${seqFlat.size} != ${seqLen}*${nFeat}"
         }
-
         val prob = runTensor3DFromFloat(b, seqFlat)
-
         if (prob.isNaN() || prob < -1e-3f || prob > 1f + 1e-3f) {
             Log.w(TAG, "${b.event}: suspicious probability=$prob")
         }
-
         return prob.coerceIn(0f, 1f)
     }
 
     private fun runSeqFromDouble(b: Bundle, seqFlat: DoubleArray): Float {
         val seqLen = b.profile.seqLen
-        val nFeat = b.schema.names.size
-
+        val nFeat  = b.schema.names.size
         require(seqFlat.size == seqLen * nFeat) {
             "${b.event}: seqFlat size ${seqFlat.size} != ${seqLen}*${nFeat}"
         }
-
         val prob = runTensor3DFromDouble(b, seqFlat)
-
         if (prob.isNaN() || prob < -1e-3f || prob > 1f + 1e-3f) {
             Log.w(TAG, "${b.event}: suspicious probability=$prob")
         }
-
         return prob.coerceIn(0f, 1f)
     }
 
     private fun runTensor3DFromFloat(b: Bundle, seqFlat: FloatArray): Float {
-        val e = env ?: throw IllegalStateException("Environment not ready")
-
-        val s = scratch(seqFlat.size)
+        val e  = env ?: throw IllegalStateException("ORT environment not ready")
+        val s  = scratch(seqFlat.size)
         val fb = s.fb
         fb.clear()
         fb.put(seqFlat, 0, seqFlat.size)
-        fb.flip() // position=0, limit=nFloats
+        fb.flip()
 
         OnnxTensor.createTensor(e, fb, b.shape3d).use { input ->
             b.session.run(mapOf(b.inputName to input)).use { results ->
@@ -331,13 +261,11 @@ object OrtSessionManager {
     }
 
     private fun runTensor3DFromDouble(b: Bundle, seqFlat: DoubleArray): Float {
-        val e = env ?: throw IllegalStateException("Environment not ready")
-
-        val s = scratch(seqFlat.size)
+        val e  = env ?: throw IllegalStateException("ORT environment not ready")
+        val s  = scratch(seqFlat.size)
         val fb = s.fb
         fb.clear()
-
-        // ✅ no FloatArray allocation; write doubles -> float buffer directly
+        // Write doubles directly into the float buffer — avoids an intermediate FloatArray allocation.
         for (i in seqFlat.indices) {
             val v = seqFlat[i]
             fb.put(if (v.isFinite()) v.toFloat() else 0.0f)
@@ -355,8 +283,8 @@ object OrtSessionManager {
 
     private fun resolveOutputIndex(session: OrtSession, outputName: String?, event: String): Int {
         if (outputName.isNullOrBlank()) return 0
-        val names = session.outputNames.toList() // done once per model
-        val idx = names.indexOf(outputName)
+        val names = session.outputNames.toList()
+        val idx   = names.indexOf(outputName)
         return if (idx >= 0) idx else {
             Log.w(TAG, "$event: outputName='$outputName' not found in outputs=$names; using index 0")
             0
@@ -364,32 +292,23 @@ object OrtSessionManager {
     }
 
     private fun firstScalarAsFloat(v: Any?): Float = when (v) {
-        null -> error("Null ONNX output value")
-        is Number -> v.toFloat()
-
-        is FloatArray -> v.firstOrNull() ?: error("Empty FloatArray output")
+        null         -> error("Null ONNX output value")
+        is Number    -> v.toFloat()
+        is FloatArray  -> v.firstOrNull() ?: error("Empty FloatArray output")
         is DoubleArray -> (v.firstOrNull() ?: error("Empty DoubleArray output")).toFloat()
-        is LongArray -> (v.firstOrNull() ?: error("Empty LongArray output")).toFloat()
-        is IntArray -> (v.firstOrNull() ?: error("Empty IntArray output")).toFloat()
-
-        is Array<*> -> {
-            val e0 = v.firstOrNull() ?: error("Empty Array output")
-            firstScalarAsFloat(e0)
-        }
-
-        is FloatBuffer -> {
-            if (v.capacity() <= 0) error("Empty FloatBuffer output")
-            v.get(0)
-        }
-
+        is LongArray   -> (v.firstOrNull() ?: error("Empty LongArray output")).toFloat()
+        is IntArray    -> (v.firstOrNull() ?: error("Empty IntArray output")).toFloat()
+        is Array<*>    -> firstScalarAsFloat(v.firstOrNull() ?: error("Empty Array output"))
+        is FloatBuffer -> { if (v.capacity() <= 0) error("Empty FloatBuffer output"); v.get(0) }
         else -> error("Unsupported ONNX output type: ${v.javaClass.name}")
     }
 
-    private fun pickOneAsset(context: Context, dir: String, suffix: String): String {
-        val files = (context.assets.list(dir) ?: emptyArray()).filter { it.endsWith(suffix) }
-        require(files.isNotEmpty()) { "@$dir: no *$suffix file found" }
+    /** Picks the single .onnx file from the given asset directory. */
+    private fun pickOnnxAsset(context: Context, dir: String): String {
+        val files = (context.assets.list(dir) ?: emptyArray()).filter { it.endsWith(".onnx") }
+        require(files.isNotEmpty()) { "@$dir: no .onnx file found" }
         if (files.size > 1) {
-            Log.w(TAG, "@$dir: multiple $suffix files found=$files; using ${files.maxOrNull()}")
+            Log.w(TAG, "@$dir: multiple .onnx files=$files; using ${files.maxOrNull()}")
         }
         return files.maxOrNull()!!
     }
@@ -402,15 +321,15 @@ object OrtSessionManager {
         event: String
     ) {
         val info = session.inputInfo[inputName]?.info
-        val ti = info as? TensorInfo ?: return
-
+        val ti   = info as? TensorInfo ?: return
         val shape = ti.shape
+
         if (shape.size != 3) {
             Log.w(TAG, "$event: input '$inputName' rank=${shape.size} (expected 3). shape=${shape.contentToString()}")
             return
         }
 
-        val seqDim = shape[1]
+        val seqDim  = shape[1]
         val featDim = shape[2]
 
         if (seqDim > 0 && seqDim.toInt() != expectedSeqLen) {

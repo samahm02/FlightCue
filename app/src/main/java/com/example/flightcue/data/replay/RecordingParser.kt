@@ -1,4 +1,3 @@
-// app/src/main/java/com/example/flightcue/data/replay/RecordingParser.kt
 package com.example.flightcue.data.replay
 
 import android.content.ContentResolver
@@ -12,16 +11,19 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 import kotlin.math.max
 
-// RecordingParser.kt
-// Parses recorded sensor data files (CSV, TSV, TXT, ZIP) into a Recording object.
-// Supports SensorRecord format, combined tables, and separate accel/baro files.
-// Automatically infers the time base and normalises all timestamps to elapsed seconds.
+/**
+ * Parses recorded sensor data files (CSV, TSV, TXT, ZIP) into a [Recording].
+ * Supports SensorRecord format, combined tables, and separate accel/baro files.
+ * Automatically infers the time base and normalises all timestamps to elapsed seconds.
+ */
 
+/** A named event marker (e.g. TAKEOFF, LANDING) with its timestamp in elapsed seconds. */
 data class Marker(
-    val name: String,   // e.g. "TAKEOFF", "LANDING"
+    val name: String,
     val tSec: Double
 )
 
+/** Parsed sensor recording ready for replay. */
 class Recording(
     val accelTs: DoubleArray,
     val ax: DoubleArray, val ay: DoubleArray, val az: DoubleArray,
@@ -29,11 +31,7 @@ class Recording(
     val pHpa: DoubleArray,
     val markers: List<Marker> = emptyList()
 ) {
-    val durationSec: Double = listOf(
-        accelTs.lastOrNull() ?: 0.0,
-        baroTs.lastOrNull() ?: 0.0
-    ).maxOrNull() ?: 0.0
-
+    /** Returns the elapsed-second timestamp of the first marker matching [name], or null. */
     fun markerSec(name: String): Double? =
         markers.firstOrNull { it.name.equals(name, ignoreCase = true) }?.tSec
 }
@@ -76,18 +74,15 @@ object RecordingParser {
                                     !name.contains("barometer") && !name.contains("pressure") -> {
                                 combinedParsed = parseCombinedStreaming(br)
                             }
-
                             (name.contains("accel")) && (name.endsWith(".csv") || name.endsWith(".tsv") || name.endsWith(".txt")) -> {
                                 accelParsed = parseAccelStreaming(br)
                             }
-
-                            // accept baro / barometer / pressure files
+                            // Accept baro / barometer / pressure files.
                             (name.contains("baro") || name.contains("barometer") || name.contains("pressure")) &&
                                     (name.endsWith(".csv") || name.endsWith(".tsv") || name.endsWith(".txt")) -> {
                                 baroParsed = parseBaroStreaming(br)
                             }
-
-                            // Some sensors drop a single SensorRecord .txt inside the ZIP
+                            // Some sensors drop a single SensorRecord .txt inside the ZIP.
                             name.endsWith(".txt") -> {
                                 combinedParsed = parseSensorRecordStreaming(br)
                             }
@@ -113,7 +108,7 @@ object RecordingParser {
         resolver.openInputStream(uri)?.use { raw ->
             BufferedReader(InputStreamReader(raw)).use { br ->
                 return when (fmt) {
-                    FileFormat.SENSOR_RECORD -> parseSensorRecordStreaming(br)
+                    FileFormat.SENSOR_RECORD  -> parseSensorRecordStreaming(br)
                     FileFormat.COMBINED_TABLE -> parseCombinedStreaming(br)
                 }
             }
@@ -140,14 +135,17 @@ object RecordingParser {
     }
 
     private fun looksLikeSensorRecordLine(line: String): Boolean {
-        if (line.indexOf(';') >= 0 && line.count { it == ';' } == 1) return true // markers like "Landing;..."
-        var c = 0
-        for (ch in line) if (ch == ':') { c++; if (c >= 1) return true }        // colon-style sensor rows
+        // Marker lines: "Landing;..." (exactly one semicolon).
+        if (line.indexOf(';') >= 0 && line.count { it == ';' } == 1) return true
+        // Colon-style sensor rows: ts:ax:ay:az or ts:p.
+        for (ch in line) if (ch == ':') return true
         return false
     }
 
     // ---------- Streaming parse implementations ----------
 
+    /** Intermediate accel result before time-base normalisation. */
+    @Suppress("ArrayInDataClass")
     private data class AccelParsed(
         val ts: DoubleArray,
         val ax: DoubleArray,
@@ -156,6 +154,8 @@ object RecordingParser {
         val markers: List<Marker> = emptyList()
     )
 
+    /** Intermediate baro result before time-base normalisation. */
+    @Suppress("ArrayInDataClass")
     private data class BaroParsed(
         val ts: DoubleArray,
         val p: DoubleArray,
@@ -164,6 +164,10 @@ object RecordingParser {
 
     private data class TimeBase(val t0: Double, val scaleToSec: Double)
 
+    /**
+     * Infers the unit of raw ticks (ns/µs/ms/s) from the median inter-sample interval
+     * and returns the origin and scale needed to convert to elapsed seconds.
+     */
     private fun inferTimeBase(ticks: DoubleArray): TimeBase {
         if (ticks.isEmpty()) return TimeBase(0.0, 1.0)
 
@@ -175,9 +179,9 @@ object RecordingParser {
         val med = diffs.medianOrDefault(10.0)
 
         val scaleToSec = when {
-            med >= 1e6 -> 1.0 / 1e9 // ns
-            med >= 1e3 -> 1.0 / 1e6 // µs
-            med >= 1.0 -> 1.0 / 1e3 // ms
+            med >= 1e6 -> 1.0 / 1e9 // nanoseconds
+            med >= 1e3 -> 1.0 / 1e6 // microseconds
+            med >= 1.0 -> 1.0 / 1e3 // milliseconds
             else       -> 1.0       // seconds
         }
         return TimeBase(t0 = ticks[0], scaleToSec = scaleToSec)
@@ -197,23 +201,22 @@ object RecordingParser {
         return when (labelRaw.trim().lowercase(Locale.US)) {
             "takeoff" -> "TAKEOFF"
             "landing" -> "LANDING"
-            else -> labelRaw.trim().uppercase(Locale.US)
+            else      -> labelRaw.trim().uppercase(Locale.US)
         }
     }
 
     /**
-     * Full SensorRecord reader:
-     * Accepts mixed lines:
-     *  - ts:ax:ay:az   → accel
-     *  - ts:p          → baro
-     *  - Landing;ts    → marker
+     * Parses a SensorRecord-format file with mixed sensor and marker lines:
+     *  - ts:ax:ay:az  → accelerometer
+     *  - ts:p         → barometer
+     *  - Landing;ts   → event marker
      */
     private fun parseSensorRecordStreaming(br: BufferedReader): Recording {
-        val tA = GrowDoubles(1 shl 17)  // 128K capacity
+        val tA = GrowDoubles(1 shl 17)  // 128 K initial capacity
         val ax = GrowDoubles(1 shl 17)
         val ay = GrowDoubles(1 shl 17)
         val az = GrowDoubles(1 shl 17)
-        val tB = GrowDoubles(1 shl 16)  // 64K capacity
+        val tB = GrowDoubles(1 shl 16)  // 64 K initial capacity
         val pp = GrowDoubles(1 shl 16)
 
         val markerTicks = ArrayList<Pair<String, Double>>(8)
@@ -227,7 +230,7 @@ object RecordingParser {
             if (s.indexOf(';') >= 0 && s.count { it == ';' } == 1) {
                 val parts = s.split(';', limit = 2)
                 val label = parts.getOrNull(0)?.trim().orEmpty()
-                val tRaw = parts.getOrNull(1)?.trim()?.toDoubleOrNull()
+                val tRaw  = parts.getOrNull(1)?.trim()?.toDoubleOrNull()
                 if (label.isNotBlank() && tRaw != null) {
                     markerTicks += normalizeMarkerName(label) to tRaw
                 }
@@ -265,9 +268,7 @@ object RecordingParser {
 
         return Recording(
             accelTs = aTs,
-            ax = ax.toArray(),
-            ay = ay.toArray(),
-            az = az.toArray(),
+            ax = ax.toArray(), ay = ay.toArray(), az = az.toArray(),
             baroTs = bTs,
             pHpa = pp.toArray(),
             markers = markers
@@ -275,10 +276,10 @@ object RecordingParser {
     }
 
     private fun parseAccelStreaming(br: BufferedReader): AccelParsed {
-            val tBuf = GrowDoubles(1 shl 17)  // ✅ 128K capacity
-            val xBuf = GrowDoubles(1 shl 17)
-            val yBuf = GrowDoubles(1 shl 17)
-            val zBuf = GrowDoubles(1 shl 17)
+        val tBuf = GrowDoubles(1 shl 17)
+        val xBuf = GrowDoubles(1 shl 17)
+        val yBuf = GrowDoubles(1 shl 17)
+        val zBuf = GrowDoubles(1 shl 17)
 
         val markerTicks = ArrayList<Pair<String, Double>>(8)
 
@@ -290,7 +291,7 @@ object RecordingParser {
             if (s.indexOf(';') >= 0 && s.count { it == ';' } == 1) {
                 val parts = s.split(';', limit = 2)
                 val label = parts.getOrNull(0)?.trim().orEmpty()
-                val tRaw = parts.getOrNull(1)?.trim()?.toDoubleOrNull()
+                val tRaw  = parts.getOrNull(1)?.trim()?.toDoubleOrNull()
                 if (label.isNotBlank() && tRaw != null) {
                     markerTicks += normalizeMarkerName(label) to tRaw
                 }
@@ -298,7 +299,7 @@ object RecordingParser {
             }
 
             val parts = fastSplit4(s) ?: continue
-            val t = parts[0].toDoubleOrNull() ?: continue
+            val t  = parts[0].toDoubleOrNull() ?: continue
             val ax = parts[1].toDoubleOrNull() ?: continue
             val ay = parts[2].toDoubleOrNull() ?: continue
             val az = parts[3].toDoubleOrNull() ?: continue
@@ -308,7 +309,7 @@ object RecordingParser {
 
         if (tBuf.isEmpty()) error("No accelerometer rows")
 
-        val base = inferTimeBase(tBuf.toArray())
+        val base  = inferTimeBase(tBuf.toArray())
         val tsSec = normalizeWithBase(tBuf.toArray(), base)
 
         val markers = markerTicks.map { (name, tick) ->
@@ -332,7 +333,7 @@ object RecordingParser {
             if (s.indexOf(';') >= 0 && s.count { it == ';' } == 1) {
                 val parts = s.split(';', limit = 2)
                 val label = parts.getOrNull(0)?.trim().orEmpty()
-                val tRaw = parts.getOrNull(1)?.trim()?.toDoubleOrNull()
+                val tRaw  = parts.getOrNull(1)?.trim()?.toDoubleOrNull()
                 if (label.isNotBlank() && tRaw != null) {
                     markerTicks += normalizeMarkerName(label) to tRaw
                 }
@@ -350,7 +351,7 @@ object RecordingParser {
             return emptyBaro()
         }
 
-        val base = inferTimeBase(tBuf.toArray())
+        val base  = inferTimeBase(tBuf.toArray())
         val tsSec = normalizeWithBase(tBuf.toArray(), base)
 
         val markers = markerTicks.map { (name, tick) ->
@@ -361,7 +362,7 @@ object RecordingParser {
     }
 
     private fun parseCombinedStreaming(br: BufferedReader): Recording {
-        var headerIdx: IntArray? = null // [iTs,iAx,iAy,iAz,iP]
+        var headerIdx: IntArray? = null // [iTs, iAx, iAy, iAz, iP]
         val ts = GrowDoubles(1 shl 17)
         val ax = GrowDoubles(1 shl 17)
         val ay = GrowDoubles(1 shl 17)
@@ -377,11 +378,11 @@ object RecordingParser {
             val raw = line.trim()
             if (raw.isEmpty() || raw.startsWith("#")) continue
 
-            // marker line: "Landing;12345"
+            // Marker line: "Landing;12345"
             if (raw.indexOf(';') >= 0 && raw.count { it == ';' } == 1) {
                 val parts = raw.split(';', limit = 2)
                 val label = parts.getOrNull(0)?.trim().orEmpty()
-                val tRaw = parts.getOrNull(1)?.trim()?.toDoubleOrNull()
+                val tRaw  = parts.getOrNull(1)?.trim()?.toDoubleOrNull()
                 if (label.isNotBlank() && tRaw != null) {
                     markerTicks += normalizeMarkerName(label) to tRaw
                 }
@@ -400,12 +401,12 @@ object RecordingParser {
             val idx = headerIdx ?: intArrayOf(0, 1, 2, 3, -1)
             fun col(i: Int): String? = if (i >= 0 && i < parts.size) parts[i] else null
 
-            val tS = col(idx[0]) ?: continue
+            val tS  = col(idx[0]) ?: continue
             val axS = col(idx[1]) ?: continue
             val ayS = col(idx[2]) ?: continue
             val azS = col(idx[3]) ?: continue
 
-            val t = tS.toDoubleOrNull() ?: continue
+            val t = tS.toDoubleOrNull()  ?: continue
             val x = axS.toDoubleOrNull() ?: continue
             val y = ayS.toDoubleOrNull() ?: continue
             val z = azS.toDoubleOrNull() ?: continue
@@ -414,8 +415,7 @@ object RecordingParser {
 
             val ip = idx[4]
             if (ip >= 0) {
-                val pS = col(ip)
-                val p = pS?.toDoubleOrNull()
+                val p = col(ip)?.toDoubleOrNull()
                 if (p != null) { bt.add(t); pp.add(p) }
             }
 
@@ -424,9 +424,9 @@ object RecordingParser {
 
         if (ts.isEmpty()) error("No rows parsed")
 
-        val base = inferTimeBase(ts.toArray())
+        val base  = inferTimeBase(ts.toArray())
         val tsSec = normalizeWithBase(ts.toArray(), base)
-        val bSec = if (bt.isEmpty()) DoubleArray(0) else normalizeWithBase(bt.toArray(), base)
+        val bSec  = if (bt.isEmpty()) DoubleArray(0) else normalizeWithBase(bt.toArray(), base)
 
         val markers = markerTicks.map { (name, tick) ->
             Marker(name = name, tSec = tickToSec(tick, base))
@@ -434,16 +434,14 @@ object RecordingParser {
 
         return Recording(
             accelTs = tsSec,
-            ax = ax.toArray(),
-            ay = ay.toArray(),
-            az = az.toArray(),
+            ax = ax.toArray(), ay = ay.toArray(), az = az.toArray(),
             baroTs = bSec,
             pHpa = pp.toArray(),
             markers = markers
         )
     }
 
-    // ---------- header & splitting helpers ----------
+    // ---------- Header & splitting helpers ----------
 
     private fun mapHeader(names: List<String>): IntArray {
         val lc = names.map { it.lowercase(Locale.US) }
@@ -453,12 +451,12 @@ object RecordingParser {
         val iAx = lc.indexOfFirst { it.startsWith("ax") }.takeIf { it >= 0 } ?: 1
         val iAy = lc.indexOfFirst { it.startsWith("ay") }.takeIf { it >= 0 } ?: 2
         val iAz = lc.indexOfFirst { it.startsWith("az") }.takeIf { it >= 0 } ?: 3
-        val iP = lc.indexOfFirst { (it.startsWith("p") && it.contains("hpa")) || it.startsWith("pressure") }
+        val iP  = lc.indexOfFirst { (it.startsWith("p") && it.contains("hpa")) || it.startsWith("pressure") }
             .takeIf { it >= 0 } ?: -1
         return intArrayOf(iTs, iAx, iAy, iAz, iP)
     }
 
-    /** Expect exactly 4 columns (ts:ax:ay:az) using common delimiters. */
+    /** Expects exactly 4 columns (ts:ax:ay:az) using common delimiters. */
     private fun fastSplit4(s: String): Array<String>? {
         var a = -1; var b = -1; var c = -1
         val n = s.length
@@ -488,7 +486,7 @@ object RecordingParser {
         )
     }
 
-    /** At least 2 columns (t, p) for baro files. */
+    /** Expects at least 2 columns (t, p) for baro files. */
     private fun fastSplitAtLeast2(s: String): Array<String>? {
         var a = -1
         val n = s.length
@@ -502,7 +500,7 @@ object RecordingParser {
         return arrayOf(String(buf, 0, a), String(buf, a + 1, n - a - 1))
     }
 
-    /** Generic small splitter for header/CSV rows (keeps memory low). */
+    /** Generic small splitter for header/CSV rows. */
     private fun fastSplitGeneric(s: String): List<String>? {
         val out = ArrayList<String>(8)
         val n = s.length
@@ -521,7 +519,7 @@ object RecordingParser {
         return out
     }
 
-    // ---------- arrays & helpers ----------
+    // ---------- Merge & utility helpers ----------
 
     private fun emptyBaro() = BaroParsed(DoubleArray(0), DoubleArray(0), emptyList())
 
@@ -529,9 +527,7 @@ object RecordingParser {
         val markers = (a.markers + b.markers).sortedBy { it.tSec }
         return Recording(
             accelTs = a.ts,
-            ax = a.ax,
-            ay = a.ay,
-            az = a.az,
+            ax = a.ax, ay = a.ay, az = a.az,
             baroTs = b.ts,
             pHpa = b.p,
             markers = markers
@@ -545,7 +541,7 @@ object RecordingParser {
         return if (m % 2 == 1) s[m / 2] else 0.5 * (s[m / 2 - 1] + s[m / 2])
     }
 
-    /** Growable primitive double buffer (no boxing). */
+    /** Growable primitive double buffer — avoids boxing overhead for large sensor arrays. */
     private class GrowDoubles(initCap: Int = 1024) {
         private var a = DoubleArray(initCap)
         private var n = 0

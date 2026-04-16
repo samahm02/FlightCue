@@ -60,7 +60,7 @@ interface FlightEventPublisher {
 }
 
 /**
- * Flow-backed publisher used by the app process.
+ * Flow-backed publisher used by the app process, open to allow AppBus to extend it as a singleton
  *
  * - state is held in a StateFlow
  * - events is a SharedFlow (buffered)
@@ -93,5 +93,6 @@ open class FlowPublisher(
  * Process-wide event bus for the "live" detector.
  *
  * Used by the service + UI to observe flight state and events.
+ *
  */
 object AppBus : FlowPublisher()

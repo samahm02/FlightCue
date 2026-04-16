@@ -1,5 +1,6 @@
 package com.example.flightcue.domain.timeseries
 
+/** Defines a single windowing grid by its window length and hop size. */
 data class GridSpec(
     val id: String,
     val winSec: Double,
@@ -11,6 +12,7 @@ data class GridSpec(
     }
 }
 
+/** A scheduled window ready for feature extraction. */
 data class WindowRequest(
     val gridId: String,
     val endSec: Double,

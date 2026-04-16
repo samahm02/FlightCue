@@ -23,6 +23,7 @@ class FlightStateMachine(
 
     private var lastEventSec: Double = Double.NEGATIVE_INFINITY
 
+    /** Feeds a takeoff probability score. Returns a FlightStarted event if the trigger fires, else null. */
     fun onTakeoffScore(p: Double, edgeSec: Double): FlightDomainEvent? {
         if (state != FlightState.NotFlying) return null
         if ((edgeSec - lastEventSec) < minSepSec) return null
@@ -40,6 +41,7 @@ class FlightStateMachine(
         return null
     }
 
+    /** Feeds a landing probability score. Returns a FlightEnded event if the trigger fires, else null. */
     fun onLandingScore(p: Double, edgeSec: Double): FlightDomainEvent? {
         if (state != FlightState.Flying) return null
         if ((edgeSec - lastEventSec) < minSepSec) return null
@@ -119,18 +121,7 @@ class FlightStateMachine(
         return ev
     }
 
-    /**
-     * Restore authoritative state, e.g. after service/process recreation.
-     * Does not emit a new event.
-     */
-    fun restoreState(restored: FlightState, nowSec: Double) {
-        state = restored
-        lastEventSec = nowSec
-        toTrigger.reset()
-        ldTrigger.reset()
-        publisher.setState(state)
-    }
-
+    /** Resets to NotFlying unconditionally. Called on service stop or full detector reset. */
     fun resetToNotFlying(nowSec: Double = Double.NEGATIVE_INFINITY) {
         state = FlightState.NotFlying
         lastEventSec = nowSec

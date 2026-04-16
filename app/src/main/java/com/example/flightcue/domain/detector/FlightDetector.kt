@@ -20,10 +20,9 @@ import com.example.flightcue.domain.timeseries.GridSpec
 import com.example.flightcue.domain.timeseries.Resample
 import com.example.flightcue.domain.timeseries.UnionGridScheduler
 import com.example.flightcue.domain.timeseries.WindowRequest
-import com.example.flightcue.domain.util.FeatureMath
+import com.example.flightcue.domain.features.FeatureMath
 import com.example.flightcue.domain.util.Params
 import kotlinx.coroutines.flow.SharedFlow
-import kotlinx.coroutines.flow.StateFlow
 import java.util.Locale
 import kotlin.math.ln
 import kotlin.math.round
@@ -75,17 +74,17 @@ class FlightDetector(
     private companion object {
         private const val TAG = "FlightDetectorCore"
 
-        private const val COVERAGE_THR = 0.80
+        private const val COVERAGE_THR = Params.COVERAGE_THR
         private const val DEFAULT_MIN_RUN = 1
         private const val DEFAULT_MAX_HOPS_PER_TICK = 200
         private const val WIN_LOG_EVERY = 50
         private const val P0_MIN_SAMPLES = 5
 
         // Shared event grids (SAME for both models)
-        private const val WIN_TO_EVENT_S = 20.0
-        private const val HOP_TO_EVENT_S = 10.0
-        private const val WIN_LD_EVENT_S = 24.0
-        private const val HOP_LD_EVENT_S = 12.0
+        private const val WIN_TO_EVENT_S = Params.WIN_TO_EVENT_S
+        private const val HOP_TO_EVENT_S = Params.HOP_TO_EVENT_S
+        private const val WIN_LD_EVENT_S = Params.WIN_LD_EVENT_S
+        private const val HOP_LD_EVENT_S = Params.HOP_LD_EVENT_S
 
         /** Extra history needed by rolling/EMA-based features to stabilize (cheap + safe). */
         private fun extraLookbackSec(): Double {
@@ -103,10 +102,8 @@ class FlightDetector(
         private fun fmt1(x: Double): String = String.format(Locale.US, "%.1f", x)
     }
 
-    enum class EdgeMode { EMA, TWO_OF_THREE }
 
     data class Overrides(
-        val edgeMode: EdgeMode? = null,
         val emaAlpha: Double? = null,
         val minSepSec: Int? = null,
         val strictHopParity: Boolean? = null,
@@ -171,7 +168,6 @@ class FlightDetector(
 
     /** Optional flow publisher for UI / dev screens. */
     private val flowPub: FlowPublisher? = eventPublisher as? FlowPublisher
-    val stateFlow: StateFlow<FlightState>? get() = flowPub?.state
     val events: SharedFlow<FlightDomainEvent>? get() = flowPub?.events
 
     private val fsm: FlightStateMachine
@@ -318,15 +314,6 @@ class FlightDetector(
         return maxOf(needTo, needLd) + extraLookbackSec()
     }
 
-    /** Return a usable p0 baseline if frozen or sufficiently sampled, else null. */
-    private fun currentFixedP0OrNull(): Double? {
-        baroP0Frozen?.let { return it }
-        if (baroP0Samples.size >= P0_MIN_SAMPLES) {
-            val arr = DoubleArray(baroP0Samples.size) { i -> baroP0Samples[i] }
-            return FeatureMath.median(arr)
-        }
-        return null
-    }
 
     /** Whether window scheduling logs are enabled (dev-only). */
     private fun windowLogsEnabled(): Boolean =
@@ -355,13 +342,7 @@ class FlightDetector(
         if (debugEnabled) Log.i(TAG, "Window origins initialized at originSec=${fmt2(nowSec)}")
     }
 
-    /**
-     * Arm LANDING from decision time:
-     * - clears landing ring so fill restarts at 0/seqLen
-     * - sets landing scheduler origin to decisionTimeSec so it starts "from now", not backfilled
-     * - clears per-grid dt tracking so first landing window gets dtPrevEndSec = 0
-     * - resets landing inference counter so skip factor counts from 0
-     */
+    // Clears and re-anchors the landing pipeline from [decisionTimeSec]
     private fun armLandingFrom(decisionTimeSec: Double) {
         ldRing.clear()
         ldRingFill = 0
@@ -376,13 +357,7 @@ class FlightDetector(
         if (debugEnabled) Log.i(TAG, "Armed LANDING pipeline from originSec=${fmt2(decisionTimeSec)}")
     }
 
-    /**
-     * Arm TAKEOFF from decision time:
-     * - clears takeoff ring so fill restarts at 0/seqLen
-     * - sets takeoff scheduler origin to decisionTimeSec so it starts "from now", not backfilled
-     * - clears per-grid dt tracking so first takeoff window gets dtPrevEndSec = 0
-     * - resets takeoff inference counter so skip factor counts from 0
-     */
+    // Clears and re-anchors the takeoff pipeline from [decisionTimeSec]
     private fun armTakeoffFrom(decisionTimeSec: Double) {
         toRing.clear()
         toRingFill = 0
@@ -463,32 +438,6 @@ class FlightDetector(
         return ev
     }
 
-    /**
-     * Restore authoritative detector state without emitting a new event.
-     *
-     * Used when the service/process is recreated and we want the detector
-     * to continue from a known phase.
-     */
-    fun restoreState(state: FlightState, nowSec: Double) {
-        ensureOrigins(nowSec)
-
-        fsm.restoreState(state, nowSec)
-
-        when (state) {
-            FlightState.NotFlying -> {
-                armTakeoffFrom(nowSec)
-                if (debugEnabled) {
-                    Log.i(TAG, "Restored detector state = NotFlying atSec=${fmt2(nowSec)}")
-                }
-            }
-            FlightState.Flying -> {
-                armLandingFrom(nowSec)
-                if (debugEnabled) {
-                    Log.i(TAG, "Restored detector state = Flying atSec=${fmt2(nowSec)}")
-                }
-            }
-        }
-    }
 
     /**
      * Main driver:
@@ -725,8 +674,8 @@ class FlightDetector(
         if (!ok) return Scaler.zeros(names.size)
 
         // toMutableMap() required — windowFeatures returns an immutable Map
-        val fMap = Features.windowFeatures(aW, bW, Params.ACCEL_HZ, Params.BARO_HZ, Params.DO_PSD)
-            .toMutableMap()
+        val fMap = Features.windowFeatures(aW, bW, Params.ACCEL_HZ, Params.BARO_HZ, true).toMutableMap()
+
 
         // Metadata injection (matches Python main() post-extraction columns)
         val accelCov = if (aW != null) tripleFiniteCoverage(aW.ax, aW.ay, aW.az) else 0.0
@@ -737,7 +686,7 @@ class FlightDetector(
         fMap["has_accel"]         = if (aW != null && aW.ax.isNotEmpty()) 1.0 else 0.0
         fMap["has_baro"]          = if (bW != null && bW.p.isNotEmpty()) 1.0 else 0.0
         fMap["has_dyn"]           = if (aW?.dyn?.any { it.isFinite() } == true) 1.0 else 0.0
-        fMap["has_spectral"]      = if (Params.DO_PSD && aW != null && aW.ax.size >= 16) 1.0 else 0.0
+        fMap["has_spectral"] = if (aW != null && aW.ax.size >= 16) 1.0 else 0.0
         fMap["grid_id"]           = gridId
         fMap["win_s"]             = winSec
         fMap["hop_s"]             = hopSec
@@ -844,7 +793,7 @@ class FlightDetector(
         val eps = 1e-9
 
         // Find first index where t >= ws - eps
-        var i0 = java.util.Arrays.binarySearch(ad.t, ws - eps).let {
+        val i0 = java.util.Arrays.binarySearch(ad.t, ws - eps).let {
             if (it >= 0) it else -(it + 1)
         }
         // Find last index where t <= we + eps
@@ -852,7 +801,7 @@ class FlightDetector(
             if (it >= 0) it else -(it + 1) - 1
         }
 
-        if (i0 > i1 || i0 >= ad.t.size || i1 < 0) return null
+        if (i0 > i1 || i0 >= ad.t.size) return null
         i1 = i1.coerceAtMost(ad.t.size - 1)
 
         fun cut(x: DoubleArray) = x.sliceArray(i0..i1)
@@ -878,7 +827,7 @@ class FlightDetector(
         val eps = 1e-9
 
         // Find first index where t >= ws - eps
-        var i0 = java.util.Arrays.binarySearch(bd.t, ws - eps).let {
+        val i0 = java.util.Arrays.binarySearch(bd.t, ws - eps).let {
             if (it >= 0) it else -(it + 1)
         }
         // Find last index where t <= we + eps
@@ -886,7 +835,7 @@ class FlightDetector(
             if (it >= 0) it else -(it + 1) - 1
         }
 
-        if (i0 > i1 || i0 >= bd.t.size || i1 < 0) return null
+        if (i0 > i1 || i0 >= bd.t.size) return null
         i1 = i1.coerceAtMost(bd.t.size - 1)
 
         fun cut(x: DoubleArray) = x.sliceArray(i0..i1)

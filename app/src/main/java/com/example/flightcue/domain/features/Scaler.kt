@@ -1,25 +1,24 @@
 package com.example.flightcue.domain.features
 
 /**
- * StandardScaler parity helper.
+ * StandardScaler helper matching the Python scaler exported to scaler.npz.
  *
- * IMPORTANT:
- * - mean/scale are per-FEATURE (length = nFeatures = 154)
- * - scaling must happen at WINDOW level (154) BEFORE building the sequence
- * - do NOT scale flattened sequences (3850) with mean/scale (154)
+ * Mean and scale arrays are per-feature (length = nFeatures).
+ * Scaling happens at window level before building the sequence —
+ * never on the flattened sequence array.
  */
 object Scaler {
 
     /**
-     * Scale one window vector (length = nFeatures):
-     * z[i] = (x[i] - mean[i]) / scale[i]
+     * Scales one window vector using z = (x - mean) / scale.
      *
      * NaN/Inf handling:
-     * - if x[i] is NaN/Inf => treat as "missing" and impute mean[i] so z[i] becomes 0
-     * - if scale[i] is ~0 => z[i] = 0
+     * - Non-finite input values are mean-imputed so the scaled output is 0.
+     * - If scale is ~0 or non-finite the output is 0.
+     * - Any remaining non-finite output is clamped to 0.
+     *
+     * Must match the training StandardScaler exported to scaler.npz.
      */
-
-    //This must match training StandardScaler exported to scaler.npz
     fun scaleWindow(
         raw: DoubleArray,
         mean: DoubleArray,
@@ -31,20 +30,14 @@ object Scaler {
 
         val out = DoubleArray(raw.size)
         for (i in raw.indices) {
-            val x = raw[i].takeIf { it.isFinite() } ?: mean[i]   // mean-impute missing => z=0
+            val x = raw[i].takeIf { it.isFinite() } ?: mean[i]
             val s = scale[i]
-
-            val z = if (!s.isFinite() || s < 1e-8) {
-                0.0
-            } else {
-                (x - mean[i]) / s
-            }
-
+            val z = if (!s.isFinite() || s < 1e-8) 0.0 else (x - mean[i]) / s
             out[i] = if (z.isFinite()) z else 0.0
         }
         return out
     }
 
-    /** Convenience for an already-scaled "neutral" window. */
-    fun zeros(nFeatures: Int): DoubleArray = DoubleArray(nFeatures) { 0.0 }
+    /** Returns an all-zero vector of length [nFeatures], used as a fallback for low-coverage windows. */
+    fun zeros(nFeatures: Int): DoubleArray = DoubleArray(nFeatures)
 }

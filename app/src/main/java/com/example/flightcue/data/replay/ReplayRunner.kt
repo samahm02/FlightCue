@@ -1,4 +1,3 @@
-// app/src/main/java/com/example/flightcue/data/replay/ReplayRunner.kt
 package com.example.flightcue.data.replay
 
 import android.content.Context
@@ -9,26 +8,27 @@ import com.example.flightcue.ml.OrtSessionManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
-import kotlin.coroutines.coroutineContext
 import kotlin.math.ceil
 import kotlin.math.max
 import java.util.Locale
 import kotlin.math.abs
 
+/** Detected and marker-based event times from a single replay run. */
 data class ReplaySummary(
-    val takeoffDataSec: Double?,     // detected by model
-    val landingDataSec: Double?,     // detected by model
-    val takeoffMarkerSec: Double?,   // marker (if present)
-    val landingMarkerSec: Double?,   // marker (if present)
-    val takeoffDeltaSec: Double?,    // detected - marker (if both exist)
-    val landingDeltaSec: Double?,    // detected - marker (if both exist)
-    val flightsDetected: Int         // completed flights (TO->LD)
+    val takeoffDataSec: Double?,   // detected by model
+    val landingDataSec: Double?,   // detected by model
+    val takeoffMarkerSec: Double?, // ground-truth marker (if present in file)
+    val landingMarkerSec: Double?, // ground-truth marker (if present in file)
+    val takeoffDeltaSec: Double?,  // detected − marker (if both exist)
+    val landingDeltaSec: Double?,  // detected − marker (if both exist)
+    val flightsDetected: Int       // completed TO→LD pairs
 )
 
-// ReplayRunner.kt
-// Runs fast offline replay by feeding a Recording through the full live detection pipeline.
-// Uses the same FlightDetector, ONNX model, buffers, and feature extraction as live mode.
-// Returns a ReplaySummary with detected event times and optional delta against file markers.
+/**
+ * Runs fast offline replay by feeding a [Recording] through the full live detection pipeline.
+ * Uses the same [FlightDetector], ONNX model, buffers, and feature extraction as live mode.
+ * Returns a [ReplaySummary] with detected event times and optional delta against file markers.
+ */
 class ReplayRunner(
     private val context: Context,
     private val onDevMsg: (String) -> Unit = {}
@@ -48,8 +48,6 @@ class ReplayRunner(
 
         val stride = tickStrideSec.coerceAtLeast(1.0)
 
-
-
         onDevMsg(
             "Replay (ML): accel=${r.ax.size} samples, " +
                     "baro=${r.pHpa.size} samples, duration≈${"%.1f".format(Locale.US, endT)}s, " +
@@ -60,7 +58,6 @@ class ReplayRunner(
         val predictor = OnnxPredictor(OrtSessionManager)
 
         val live = LiveDetection(
-            context = context,
             predictor = predictor,
             debug = false,
             overrides = FlightDetector.Overrides(
@@ -77,14 +74,14 @@ class ReplayRunner(
         var inFlight = false
         var flightsDetected = 0
 
-        val mainTicks = if (endT > 0.0 && stride > 0.0) ceil(endT / stride).toInt() else 0
-        val flushTicks = 3
+        val mainTicks  = if (endT > 0.0 && stride > 0.0) ceil(endT / stride).toInt() else 0
+        val flushTicks = 3  // extra ticks after end to drain any buffered detections
         val totalTicks = mainTicks + flushTicks
         if (totalTicks > 0) onProgress?.invoke(0.0)
 
         var tickIndex = 0
 
-        // Main loop
+        // Main replay loop: feed sensor data up to each tick boundary, then call tick().
         for (i in 0 until mainTicks) {
             coroutineContext.ensureActive()
 
@@ -120,7 +117,7 @@ class ReplayRunner(
             if (totalTicks > 0) onProgress?.invoke((tickIndex.toDouble() / totalTicks).coerceIn(0.0, 1.0))
         }
 
-        // Tail flush ticks
+        // Tail flush: tick past end of recording to drain any remaining buffered detections.
         for (k in 0 until flushTicks) {
             coroutineContext.ensureActive()
 
@@ -148,45 +145,37 @@ class ReplayRunner(
 
         val toMarker = r.markerSec("TAKEOFF")
         val ldMarker = r.markerSec("LANDING")
-        val toDelta = if (firstTakeoff != null && toMarker != null) firstTakeoff - toMarker else null
-        val ldDelta = if (lastLanding != null && ldMarker != null) lastLanding - ldMarker else null
-
-        // Dev summary line
-        val toStr = fmtTime(firstTakeoff)
-        val ldStr = fmtTime(lastLanding)
-        val toM = fmtTime(toMarker)
-        val ldM = fmtTime(ldMarker)
-        val toD = fmtDelta(toDelta)
-        val ldD = fmtDelta(ldDelta)
+        val toDelta  = if (firstTakeoff != null && toMarker != null) firstTakeoff - toMarker else null
+        val ldDelta  = if (lastLanding  != null && ldMarker != null) lastLanding  - ldMarker else null
 
         onDevMsg(
             "Replay (ML) result: " +
-                    "TO=$toStr (marker=$toM, Δ=$toD), " +
-                    "LD=$ldStr (marker=$ldM, Δ=$ldD), " +
+                    "TO=${fmtTime(firstTakeoff)} (marker=${fmtTime(toMarker)}, Δ=${fmtDelta(toDelta)}), " +
+                    "LD=${fmtTime(lastLanding)} (marker=${fmtTime(ldMarker)}, Δ=${fmtDelta(ldDelta)}), " +
                     "completedFlights=$flightsDetected"
         )
 
         onProgress?.invoke(1.0)
 
         ReplaySummary(
-            takeoffDataSec = firstTakeoff,
-            landingDataSec = lastLanding,
+            takeoffDataSec   = firstTakeoff,
+            landingDataSec   = lastLanding,
             takeoffMarkerSec = toMarker,
             landingMarkerSec = ldMarker,
-            takeoffDeltaSec = toDelta,
-            landingDeltaSec = ldDelta,
-            flightsDetected = flightsDetected
+            takeoffDeltaSec  = toDelta,
+            landingDeltaSec  = ldDelta,
+            flightsDetected  = flightsDetected
         )
     }
 
-    private fun fmtTime(t: Double?): String =
-        if (t == null) "n/a" else {
-            val s = t.toInt()
-            val hh = s / 3600
-            val mm = (s % 3600) / 60
-            val ss = s % 60
-            "%02d:%02d:%02d".format(Locale.US, hh, mm, ss)
-        }
+    private fun fmtTime(t: Double?): String {
+        if (t == null) return "n/a"
+        val s  = t.toInt()
+        val hh = s / 3600
+        val mm = (s % 3600) / 60
+        val ss = s % 60
+        return "%02d:%02d:%02d".format(Locale.US, hh, mm, ss)
+    }
 
     private fun fmtDelta(d: Double?): String {
         if (d == null) return "n/a"

@@ -31,7 +31,7 @@ import java.util.concurrent.atomic.AtomicInteger
  * Storage per flight: ~0.4–0.7 KB. Rotation at ~5 MB by default.
  */
 class EventLogWriter(
-    private val appContext: Context,
+    appContext: Context,
     private val events: Flow<FlightDomainEvent>,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -221,7 +221,4 @@ class EventLogWriter(
 
     private fun EventMode.toWire(): String = if (this == EventMode.FORCED) "forced" else "auto"
 
-    companion object {
-        private const val TAG = "EventLogWriter"
-    }
 }

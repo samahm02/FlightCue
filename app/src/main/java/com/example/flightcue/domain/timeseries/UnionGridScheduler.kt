@@ -28,6 +28,7 @@ class UnionGridScheduler(
 
     private fun round6(x: Double): Double = round(x * 1e6) / 1e6
 
+    /** Sets the stream origin and initialises each grid's first window end-time. */
     fun setOrigin(originSec: Double) {
         require(originSec.isFinite()) { "UnionGridScheduler.setOrigin: originSec invalid=$originSec" }
         this.originSec = originSec
@@ -39,7 +40,7 @@ class UnionGridScheduler(
         initialized = true
     }
 
-
+    /** Resets scheduler state; requires setOrigin() before next use. */
     fun reset() {
         nextEndById.clear()
         initialized = false
@@ -64,6 +65,11 @@ class UnionGridScheduler(
         initialized = true
     }
 
+    /**
+     * If the scheduler has fallen more than [maxLagSec] behind [nowSec],
+     * fast-forwards all grids to the most recent end-time at or before now.
+     * Returns true if a fast-forward occurred.
+     */
     fun fastForwardIfLagging(nowSec: Double, maxLagSec: Double): Boolean {
         ensureInit(nowSec)
         val minNext = nextEndById.values.minOrNull() ?: nowSec
@@ -76,6 +82,10 @@ class UnionGridScheduler(
         return false
     }
 
+    /**
+     * Returns the next due WindowRequest across all grids, or null if none are ready.
+     * Advances the returned grid's next end-time by one hop.
+     */
     fun pollNext(nowSec: Double, eps: Double = 1e-6): WindowRequest? {
         ensureInit(nowSec)
 

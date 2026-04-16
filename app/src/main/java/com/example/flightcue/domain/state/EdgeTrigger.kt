@@ -24,14 +24,18 @@ class EdgeTrigger(
 
     private val minRunWinsClamped = if (minRunWins < 1) 1 else minRunWins
 
-    // Treat as "no hysteresis" if thresholds are equal (within epsilon).
+    // True when thresholds are equal — disables the hysteresis dead-band.
     private val noHyst = abs(tOn - tOff) <= 1e-12
 
-    private var armed = startArmed
-    private var run = 0
-    private var lastFire = Double.NEGATIVE_INFINITY
-    private var s: Double? = null
+    private var armed = startArmed // whether the trigger can fire
+    private var run = 0  // consecutive ON-windows since arming
+    private var lastFire = Double.NEGATIVE_INFINITY   // elapsed seconds of last fire
+    private var s: Double? = null   // EMA state (null until first sample)
 
+    /**
+     * Feed one probability score at time [t].
+     * Returns true when the trigger fires (run >= minRun and cooldown elapsed).
+     */
     fun update(pRaw: Double, t: Double): Boolean {
         val p = emaAlpha?.let { a ->
             s = s?.let { it + a * (pRaw - it) } ?: pRaw
@@ -68,6 +72,7 @@ class EdgeTrigger(
         return false
     }
 
+    /** Resets trigger state, optionally restoring armed status and last-fire time. */
     fun reset(startArmed: Boolean = true, lastFireSec: Double = Double.NEGATIVE_INFINITY) {
         armed = startArmed
         run = 0

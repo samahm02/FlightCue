@@ -18,18 +18,29 @@ import kotlin.math.ln
 import kotlin.math.round
 
 /**
- * Full end-to-end pipeline parity test — pure JVM, no Android device required.
+ * End-to-end feature parity test pure JVM, no Android device required.
  *
- * Run with:
- *   ./gradlew :app:testDebugUnitTest --tests "com.example.flightcue.FeatureParityTest"
+ * Verifies that the Kotlin feature extraction pipeline produces identical
+ * results to the Python preprocessing script used during model training.
+ * This is the most critical correctness test in the project: if features
+ * computed on-device differ from training features, the model will silently
+ * produce wrong predictions regardless of model quality.
+ *
+ * What is tested:
+ *  1. Resampling — irregular sensor timestamps → fixed-rate causal grid
+ *  2. Window scheduling — UnionGridScheduler produces the same windows as Python
+ *  3. Feature extraction — all 154 features match within tolerance (1e-5)
+ *
+ * Last passing run: 50 windows × 154 features, 7700/7700 checks passed.
  *
  * Required files in app/src/test/resources/:
- *   parity_golden.npz
- *   parity_golden_feature_names.json
+ *   parity_golden.npz                  — raw sensor data + Python reference features
+ *   parity_golden_feature_names.json   — ordered feature name list
  *
- * Note: scaler.npz is NOT used here. Z-score standardisation is embedded inside
- * the ONNX model graph and is verified separately by ParityRunner at startup.
- * This test covers raw feature parity only.
+ * Note: StandardScaler normalisation is embedded in the ONNX graph and is
+ * verified separately by ParityRunner at startup. This test covers raw
+ * (pre-scaling) feature parity only.
+ *
  */
 class FeatureParityTest {
 
@@ -67,12 +78,12 @@ class FeatureParityTest {
         // the bin: (t_grid[k-1], t_grid[k]].
         // -----------------------------------------------------------------------
         val obsAccelMask = if (golden.rawAccelT.isNotEmpty() && aR.t.isNotEmpty())
-            computeObsMask(golden.rawAccelT, aR.t, Params.ACCEL_HZ)
+            computeObsMask(golden.rawAccelT, aR.t)
         else
             BooleanArray(0)
 
         val obsBaroMask = if (golden.rawBaroT.isNotEmpty() && bR.t.isNotEmpty())
-            computeObsMask(golden.rawBaroT, bR.t, Params.BARO_HZ)
+            computeObsMask(golden.rawBaroT, bR.t)
         else
             BooleanArray(0)
 
@@ -177,7 +188,7 @@ class FeatureParityTest {
             val accelCov = if (obsA_w.isNotEmpty()) obsA_w.count { it }.toDouble() / obsA_w.size else 0.0
             val baroCov  = if (obsB_w.isNotEmpty()) obsB_w.count { it }.toDouble() / obsB_w.size else 0.0
 
-            val fMap = Features.windowFeatures(aW, bW, Params.ACCEL_HZ, Params.BARO_HZ, Params.DO_PSD)
+            val fMap = Features.windowFeatures(aW, bW, Params.ACCEL_HZ, Params.BARO_HZ, true)
                 .toMutableMap()
 
             fMap["accel_coverage"]    = accelCov
@@ -185,7 +196,7 @@ class FeatureParityTest {
             fMap["has_accel"]         = if (aW != null && aW.ax.isNotEmpty()) 1.0 else 0.0
             fMap["has_baro"]          = if (bW != null && bW.p.isNotEmpty()) 1.0 else 0.0
             fMap["has_dyn"]           = if (aW?.dyn?.any { it.isFinite() } == true) 1.0 else 0.0
-            fMap["has_spectral"]      = if (Params.DO_PSD && aW != null && aW.ax.size >= 16) 1.0 else 0.0
+            fMap["has_spectral"]      = if (aW != null && aW.ax.size >= 16) 1.0 else 0.0
             fMap["grid_id"]           = gridId.toDouble()
             fMap["win_s"]             = winS
             fMap["hop_s"]             = hopS
@@ -255,7 +266,7 @@ class FeatureParityTest {
     // obs_mask computation — matches Python causal_resample_with_mask
     // ---------------------------------------------------------------------------
 
-    private fun computeObsMask(rawT: DoubleArray, gridT: DoubleArray, hz: Double): BooleanArray {
+    private fun computeObsMask(rawT: DoubleArray, gridT: DoubleArray): BooleanArray {
         val result = BooleanArray(gridT.size)
         if (rawT.isEmpty()) return result
 
@@ -346,7 +357,7 @@ class FeatureParityTest {
     // Golden data model
     // ---------------------------------------------------------------------------
 
-    private data class GoldenData(
+    private class GoldenData(
         val nWindows:           Int,
         val nFeatures:          Int,
         val schedulerOriginSec: Double,

@@ -1,5 +1,10 @@
 package com.example.flightcue.domain.timeseries
 
+/**
+ * Thread-safe circular buffer for accelerometer samples.
+ * Capacity covers ~100s at the maximum expected device rate (200 Hz).
+ * snapshotSince() returns a time-sorted slice for safe use on the detector thread.
+ */
 class AccelBuffer(private val cap: Int = 20_000) {   // 100s × 200Hz max device rate
     private val lock = Any()
     private val t  = DoubleArray(cap)
@@ -37,14 +42,13 @@ class AccelBuffer(private val cap: Int = 20_000) {   // 100s × 200Hz max device
             outT[j] = t[idx]; outX[j] = ax[idx]; outY[j] = ay[idx]; outZ[j] = az[idx]
         }
 
-        // FIX: match Python's sort_values("t") — sort by timestamp before returning
         sortByTimestamp(outT, outX, outY, outZ, m)
 
         AccelSlice(outT, outX, outY, outZ)
     }
 
     private fun sortByTimestamp(t: DoubleArray, x: DoubleArray, y: DoubleArray, z: DoubleArray, n: Int) {
-        // Insertion sort: O(n) when nearly sorted (out-of-order is rare per Jonas)
+        // Insertion sort: O(n) when nearly sorted (out-of-order is rare per Reinholdt)
         for (i in 1 until n) {
             val ti = t[i]; val xi = x[i]; val yi = y[i]; val zi = z[i]
             var j = i - 1
@@ -57,6 +61,10 @@ class AccelBuffer(private val cap: Int = 20_000) {   // 100s × 200Hz max device
     }
 }
 
+/**
+ * Thread-safe circular buffer for barometer samples.
+ * Capacity covers ~160s at the maximum expected device rate (25 Hz).
+ */
 class BaroBuffer(private val cap: Int = 4_000) {     // 160s × 25Hz max device rate
     private val lock = Any()
     private val t = DoubleArray(cap); private val p = DoubleArray(cap)
@@ -86,12 +94,12 @@ class BaroBuffer(private val cap: Int = 4_000) {     // 160s × 25Hz max device 
             outT[j] = t[idx]; outP[j] = p[idx]
         }
 
-        // FIX: match Python's sort_values("t")
         sortByTimestamp(outT, outP, m)
 
         BaroSlice(outT, outP)
     }
 
+    // Insertion sort: O(n) on nearly-sorted data; out-of-order timestamps are rare in practice.
     private fun sortByTimestamp(t: DoubleArray, p: DoubleArray, n: Int) {
         for (i in 1 until n) {
             val ti = t[i]; val pi = p[i]
@@ -104,5 +112,5 @@ class BaroBuffer(private val cap: Int = 4_000) {     // 160s × 25Hz max device 
     }
 }
 
-data class AccelSlice(val t: DoubleArray, val ax: DoubleArray, val ay: DoubleArray, val az: DoubleArray)
-data class BaroSlice (val t: DoubleArray, val p: DoubleArray)
+class AccelSlice(val t: DoubleArray, val ax: DoubleArray, val ay: DoubleArray, val az: DoubleArray)
+class BaroSlice (val t: DoubleArray, val p: DoubleArray)

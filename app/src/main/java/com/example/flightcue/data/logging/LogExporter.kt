@@ -1,4 +1,3 @@
-// file: app/src/main/java/com/example/flightcue/data/logging/LogExporter.kt
 package com.example.flightcue.data.logging
 
 import android.content.Context
@@ -15,6 +14,7 @@ import java.util.Locale
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
+/** Utilities for exporting and clearing flight log files. */
 object LogExporter {
 
     /** Zips all rotated logs (flightlog*.jsonl) and opens a share sheet. */
@@ -38,7 +38,7 @@ object LogExporter {
             }
         }
 
-        shareFile(context, zipFile, "application/zip", "Flight logs")
+        shareZipFile(context, zipFile)
     }
 
     /** Deletes all log files. Returns true if anything was deleted. */
@@ -50,18 +50,17 @@ object LogExporter {
         return any
     }
 
-    // ---- helpers ----
-    private fun shareFile(context: Context, file: File, mime: String, title: String) {
+    private fun shareZipFile(context: Context, file: File) {
         val uri: Uri = FileProvider.getUriForFile(
             context,
             "${context.packageName}.fileprovider",
             file
         )
         val intent = Intent(Intent.ACTION_SEND).apply {
-            type = mime
+            type = "application/zip"
             putExtra(Intent.EXTRA_STREAM, uri)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
-        context.startActivity(Intent.createChooser(intent, "Share $title"))
+        context.startActivity(Intent.createChooser(intent, "Share Flight logs"))
     }
 }

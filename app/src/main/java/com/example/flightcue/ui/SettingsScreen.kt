@@ -14,6 +14,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.flightcue.viewmodel.SettingsViewModel
 
+/** Settings screen for toggling detection and managing local flight log files. */
 @Composable
 fun SettingsScreen(vm: SettingsViewModel = viewModel(factory = SettingsViewModel.Factory)) {
     val ctx = LocalContext.current

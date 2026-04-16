@@ -1,32 +1,20 @@
 // file: app/src/main/java/com/example/flightcue/ui/DetectionViewModel.kt
-package com.example.flightcue.ui
+package com.example.flightcue.viewmodel
 
 import android.app.Application
-import android.os.SystemClock
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.CreationExtras
-import com.example.flightcue.data.SettingsStore
 import com.example.flightcue.domain.events.AppBus
-import com.example.flightcue.domain.events.EventMode
 import com.example.flightcue.domain.events.FlightDomainEvent
 import com.example.flightcue.domain.events.FlightState
 import com.example.flightcue.service.FlightDetectionService
 import kotlinx.coroutines.flow.*
-import kotlinx.coroutines.launch
 
+/** Exposes flight state and last event from AppBus, and forwards manual override actions to the service. */
 class DetectionViewModel(app: Application) : AndroidViewModel(app) {
-    private val settings = SettingsStore(app)
-
-    val detectionEnabled: StateFlow<Boolean> =
-        settings.detectionEnabled.stateIn(
-            scope = viewModelScope,
-            started = SharingStarted.WhileSubscribed(5_000),
-            initialValue = true
-        )
-
     fun startService() {
         FlightDetectionService.start(getApplication())
     }
@@ -43,7 +31,6 @@ class DetectionViewModel(app: Application) : AndroidViewModel(app) {
             .runningFold<FlightDomainEvent, FlightDomainEvent?>(null) { _, e -> e }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
-    fun setEnabled(v: Boolean) = viewModelScope.launch { settings.setDetectionEnabled(v) }
 
     fun forceToggle() {
         when (flightState.value) {

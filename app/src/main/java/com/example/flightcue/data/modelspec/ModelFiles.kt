@@ -3,6 +3,7 @@ package com.example.flightcue.data.modelspec
 import android.content.Context
 import android.util.Log
 
+/** Thin helpers for reading model asset files and logging their inventory on startup. */
 object ModelFiles {
     private const val TAG = "ModelFiles"
 
@@ -12,12 +13,7 @@ object ModelFiles {
     fun listLanding(context: Context): List<String> =
         context.assets.list(AppPaths.LANDING_DIR)?.toList().orEmpty()
 
-    fun readAssetText(context: Context, path: String): String =
-        context.assets.open(path).bufferedReader().use { it.readText() }
-
-    fun readAssetBytes(context: Context, path: String): ByteArray =
-        context.assets.open(path).use { it.readBytes() }
-
+    /** Logs the asset inventory for both model directories and throws if either is empty. */
     fun logInventory(context: Context) {
         val to = listTakeoff(context)
         val ld = listLanding(context)

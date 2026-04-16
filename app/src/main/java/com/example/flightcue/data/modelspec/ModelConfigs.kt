@@ -17,21 +17,23 @@ import kotlin.math.round
 
 private const val TAG = "ModelConfigs"
 
-/** Parsed profile used by the detector. */
+/**
+ * Parsed detection profile loaded from profile.json.
+ * Drives feature windowing, GRU sequence construction, and the detector FSM.
+ */
 data class ModelProfile(
-    val profile: String,         // e.g., "takeoff"
-    val event: String,           // "TAKEOFF" / "LANDING"
-    val threshold: Double,       // primary threshold (T_on)
-    val hystRatio: Double,       // legacy hysteresis ratio (T_off = threshold * hystRatio); for GRU defaults to 1.0 (disabled)
+    val profile: String,      // e.g. "takeoff"
+    val event: String,        // "TAKEOFF" / "LANDING"
+    val threshold: Double,    // detection threshold (T_on)
+    val hystRatio: Double,    // hysteresis ratio (T_off = threshold * hystRatio); GRU: 1.0 (disabled)
     val nFeatures: Int,
     val seed: Int?,
-    val posIndex: Int,           // legacy (kept); usually 0 for scalar prob output
+    val posIndex: Int,        // legacy; usually 0 for scalar probability output
 
-    // ---- NEW: model type + consecutive trigger ----
-    val modelType: String = "unknown", // e.g., "gru"
-    val triggerK: Int = 1,             // consecutive-k requirement (GRU uses this)
+    val modelType: String = "unknown", // e.g. "gru"
+    val triggerK: Int = 1,             // consecutive windows required to fire
 
-    // ---- GRU / sequence settings (from exporter profile.json) ----
+    // GRU / sequence settings
     val seqLen: Int = 1,
     val labelIdx: Int = 0,
     val futureWindows: Int = 0,
@@ -40,30 +42,30 @@ data class ModelProfile(
     val onnxInputName: String? = null,
     val onnxOutputName: String? = null,
 
-    // Optional post-processing knobs (defaults are NO-OP and logged)
+    // Optional post-processing knobs (defaults are no-ops)
     val smoothing: Int = 0,
     val minRun: Int = 0,
     val cooldownMs: Long = 0,
     val minSepMs: Long = 0
 ) {
-
-    /** GRU-only: hysteresis disabled => T_off == T_on */
+    /** Returns (T_on, T_off). For GRU hysteresis is disabled, so both equal [threshold]. */
     fun thresholds(): Pair<Double, Double> {
         val on = threshold
         val off = threshold
         return on to off
     }
-
 }
 
+/** Ordered feature names and optional schema version loaded from features.json. */
 data class FeatureSchema(
     val names: List<String>,
     val version: String? = null
 )
 
+/** Parses model asset files (features, scaler, profile) from the app's assets directory. */
 object ModelConfigs {
 
-    /** Load & parse the *features* schema for TAKEOFF/LANDING from assets. */
+    /** Loads and parses the feature schema for the given model direction. */
     @JvmStatic
     fun parseFeatures(context: Context, isTakeoff: Boolean): FeatureSchema {
         val (event, dir) = eventAndDir(isTakeoff)
@@ -94,73 +96,7 @@ object ModelConfigs {
         }
     }
 
-    /**
-     * Load & parse a "fill vector" aligned to the provided schema.
-     *
-     * Backwards compatible:
-     *  - If *medians*.json exists -> use it (legacy).
-     *  - Else -> try to extract a usable 1D vector from scaler.npz (median/center/mean).
-     *  - Else -> safe fallback (zeros) so the app does not crash.
-     *
-     * NOTE:
-     * This vector is used in your app as a "medians/fill" baseline (e.g. debugRunOnMedians()).
-     * For GRU models with StandardScaler-in-ONNX, using scaler.mean as fill is acceptable.
-     */
-    @JvmStatic
-    fun parseMedians(context: Context, schema: FeatureSchema, isTakeoff: Boolean): DoubleArray {
-        val (event, dir) = eventAndDir(isTakeoff)
-        val eventLower = event.lowercase(Locale.US)
-
-        // 1) Try legacy medians JSON first (if present).
-        val mediansJsonName = tryPickAssetOrNull(
-            context = context,
-            dir = dir,
-            preferredNames = listOf(
-                "$eventLower.medians.json",
-                "medians.json",
-                ".medians.json"
-            ),
-            suffixes = listOf("medians.json", ".medians.json")
-        )
-
-        if (mediansJsonName != null) {
-            val text = context.assets.open("$dir/$mediansJsonName").use { it.readBytes().decodeToString() }
-            val medians = when (val root = JSONTokener(text).nextValue()) {
-                is JSONObject -> mediansFromObject(root, schema, mediansJsonName)
-                is JSONArray  -> mediansFromArray(root, schema, mediansJsonName)
-                else -> throw IllegalArgumentException("$mediansJsonName: expected JSONObject or JSONArray for medians")
-            }
-            Log.i(TAG, "$event medians: OK (${medians.size} matched) (file=$mediansJsonName)")
-            return medians
-        }
-
-        // 2) No medians json -> derive from scaler.npz (preferred for your GRU exports).
-        val scalerName = tryPickAssetOrNull(
-            context = context,
-            dir = dir,
-            preferredNames = listOf("scaler.npz"),
-            suffixes = listOf(".npz")
-        )
-
-        if (scalerName != null) {
-            val derived = context.assets.open("$dir/$scalerName").use { stream ->
-                readFillVectorFromScalerNpz(stream, expectedLen = schema.names.size)
-            }
-            if (derived != null) {
-                Log.i(TAG, "$event medians: derived from $scalerName (${derived.size} matched)")
-                return derived
-            }
-            Log.w(TAG, "$event medians: scaler present ($scalerName) but no usable center/median/mean vector found.")
-        } else {
-            Log.w(TAG, "$event medians: no medians JSON and no scaler.npz found in @$dir.")
-        }
-
-        // 3) Safe fallback
-        Log.w(TAG, "$event medians: falling back to zeros (len=${schema.names.size}).")
-        return DoubleArray(schema.names.size) { 0.0 }
-    }
-
-    /** Load & parse the *profile* for TAKEOFF/LANDING. */
+    /** Loads and parses the detection profile for the given model direction. */
     @JvmStatic
     fun parseProfile(context: Context, isTakeoff: Boolean): ModelProfile {
         val (event, dir) = eventAndDir(isTakeoff)
@@ -179,7 +115,7 @@ object ModelConfigs {
         )
 
         context.assets.open("$dir/$fname").use { stream ->
-            // Default the event from the directory (TAKEOFF/LANDING) so it never becomes UNKNOWN.
+            // Pass the directory-derived event so the profile never falls back to UNKNOWN.
             val profile = parseProfile(stream, sourceName = fname, defaultEventUpper = event)
 
             val (on, off) = profile.thresholds()
@@ -196,43 +132,59 @@ object ModelConfigs {
         }
     }
 
-    // ------------------------------------------------------------
-    // Stream / JSONObject parsers
-    // ------------------------------------------------------------
-
-    /** Public API: parse profile without an external default event. */
+    /**
+     * Loads mean and scale arrays from scaler.npz.
+     * Both are required for StandardScaler normalisation: (x - mean) / scale.
+     */
     @JvmStatic
-    fun parseProfile(stream: InputStream, sourceName: String = "profile.json"): ModelProfile {
-        val text = stream.readBytes().decodeToString()
-        return parseProfile(JSONObject(text), sourceName, defaultEventUpper = null)
+    fun parseScaler(context: Context, schema: FeatureSchema, isTakeoff: Boolean): Pair<DoubleArray, DoubleArray> {
+        val (event, dir) = eventAndDir(isTakeoff)
+
+        val scalerName = tryPickAssetOrNull(
+            context = context,
+            dir = dir,
+            preferredNames = listOf("scaler.npz"),
+            suffixes = listOf(".npz")
+        ) ?: throw IllegalArgumentException("$event: scaler.npz not found in @$dir")
+
+        context.assets.open("$dir/$scalerName").use { stream ->
+            val (mean, scale) = readScalerNpz(stream, expectedLen = schema.names.size)
+                ?: throw IllegalArgumentException("$event: failed to parse scaler.npz")
+
+            Log.i(TAG, "$event scaler: mean[0]=${mean[0]}, scale[0]=${scale[0]} (file=$scalerName)")
+            return mean to scale
+        }
     }
 
-    /** Internal: parse profile with an optional default event (TAKEOFF/LANDING from directory). */
+    // ------------------------------------------------------------
+    // Profile parsers
+    // ------------------------------------------------------------
+
+    /** Parses a profile from a stream, using [defaultEventUpper] if the JSON omits the event field. */
     private fun parseProfile(stream: InputStream, sourceName: String, defaultEventUpper: String): ModelProfile {
         val text = stream.readBytes().decodeToString()
         return parseProfile(JSONObject(text), sourceName, defaultEventUpper = defaultEventUpper)
     }
 
-    @JvmStatic
-    fun parseProfile(json: JSONObject, sourceName: String = "profile.json"): ModelProfile {
-        return parseProfile(json, sourceName, defaultEventUpper = null)
-    }
-
     private fun parseProfile(json: JSONObject, sourceName: String, defaultEventUpper: String?): ModelProfile {
-        // Profile name is optional; keep a sensible fallback.
+        // Profile name is optional; use a sensible fallback.
         val profileName = json.optString("profile", json.optString("model_name", json.optString("name", "")))
             .ifBlank { "unknown" }
 
-        val threshold = needDouble(json, sourceName, "threshold", default = null)
-        val nFeatures = needInt(json, sourceName, "n_features", default = null)
+        // threshold and n_features are required; throw if absent.
+        val threshold = getFlexibleDouble(json, "threshold")
+            ?: throw IllegalArgumentException("$sourceName: missing/non-numeric 'threshold'")
+        val nFeatures = getFlexibleDouble(json, "n_features")?.toInt()
+            ?: json.optString("n_features", "").trim().toIntOrNull()
+            ?: throw IllegalArgumentException("$sourceName: missing/non-numeric 'n_features'")
+
         val seed: Int? = json.optOrNullInt("seed")
 
-        // Exporter often uses scalar prob output; keep posIndex as a compatibility knob.
+        // Scalar probability output is standard; posIndex kept for legacy compatibility.
         val posIndex = json.optOrNullInt("head_index")
             ?: json.optOrNullInt("onnx_output_pos_index")
             ?: 0
 
-        // ---- NEW: model_type + trigger_k ----
         val modelType = json.optString("model_type", json.optString("modelType", "unknown"))
             .trim()
             .lowercase(Locale.US)
@@ -241,17 +193,15 @@ object ModelConfigs {
             ?: json.optOrNullInt("triggerK")
             ?: 1).coerceAtLeast(1)
 
-        // ---- GRU / sequence fields ----
         val seqLen = json.optInt("seq_len", 1).coerceAtLeast(1)
         val labelIdxRaw = json.optInt("label_idx", 0)
         val labelIdx = labelIdxRaw.coerceIn(0, seqLen - 1)
 
-        // timing can be nested ("timing") or sometimes placed at root; support both
+        // Timing fields can be nested under "timing" or placed at root; support both.
         val timing = json.optJSONObject("timing")
         val hopSec = readTimingDouble(json, timing, "hop_s")
         val winLenSec = readTimingDouble(json, timing, "win_len_s")
 
-        // future_windows can also be nested or root
         val futureWindowsDefault = maxOf(0, (seqLen - 1 - labelIdx))
         val futureWindows =
             timing?.optOrNullInt("future_windows")
@@ -259,10 +209,11 @@ object ModelConfigs {
                 ?: futureWindowsDefault
 
         val onnx = json.optJSONObject("onnx")
-        val inName = onnx?.optString("input_name", null)?.takeIf { it.isNotBlank() }
-        val outName = onnx?.optString("output_name", null)?.takeIf { it.isNotBlank() }
+        // optString requires a non-null fallback; use "" and convert blank to null.
+        val inName = onnx?.optString("input_name", "")?.takeIf { it.isNotBlank() }
+        val outName = onnx?.optString("output_name", "")?.takeIf { it.isNotBlank() }
 
-        // Event can be under various keys; if missing, fall back to directory-provided event.
+        // Event can be under various keys; fall back to directory-provided event if missing.
         val eventFromJson = readEventUpper(json)
         val event = (
                 eventFromJson
@@ -275,11 +226,11 @@ object ModelConfigs {
             Log.w(TAG, "$sourceName: event missing; could not infer. Using UNKNOWN.")
         }
 
-        // hysteresis ratio (legacy). For GRU: default to 1.0 (disable hysteresis) unless explicitly provided.
+        // Hysteresis is legacy. GRU defaults to 1.0 (disabled) unless explicitly provided.
         val hystRaw = getFlexibleDouble(json, "hyst_ratio")
         val hystDefault = when (modelType) {
             "gru" -> 1.0
-            else -> defaultHystRatioFor(event)
+            else  -> defaultHystRatioFor(event)
         }
         var hyst = hystRaw ?: run {
             Log.i(TAG, "$sourceName: hyst_ratio missing -> using default=$hystDefault for model_type=$modelType event=$event")
@@ -289,23 +240,23 @@ object ModelConfigs {
         // Clamp for safety; allow exactly 1.0 for GRU (disabled hysteresis).
         val clamped = when (modelType) {
             "gru" -> hyst.coerceIn(0.05, 1.0)
-            else -> hyst.coerceIn(0.05, 0.99)
+            else  -> hyst.coerceIn(0.05, 0.99)
         }
         if (clamped != hyst) {
             Log.w(TAG, "$sourceName: hyst_ratio=$hyst out of range. Clamped to $clamped")
             hyst = clamped
         }
 
-        // Optional post-processing knobs
-        var smoothing = json.optOrNullInt("smoothing") ?: 0
-        var minRun = json.optOrNullInt("min_run") ?: 0
+        // Optional post-processing knobs; clamp negatives to 0.
+        var smoothing  = json.optOrNullInt("smoothing")   ?: 0
+        var minRun     = json.optOrNullInt("min_run")      ?: 0
         var cooldownMs = json.optOrNullLong("cooldown_ms") ?: 0L
-        var minSepMs = json.optOrNullLong("min_sep_ms") ?: 0L
+        var minSepMs   = json.optOrNullLong("min_sep_ms")  ?: 0L
 
-        if (smoothing < 0) { Log.w(TAG, "$sourceName: smoothing=$smoothing < 0; clamped to 0"); smoothing = 0 }
-        if (minRun < 0)    { Log.w(TAG, "$sourceName: min_run=$minRun < 0; clamped to 0"); minRun = 0 }
-        if (cooldownMs < 0){ Log.w(TAG, "$sourceName: cooldown_ms=$cooldownMs < 0; clamped to 0"); cooldownMs = 0 }
-        if (minSepMs < 0)  { Log.w(TAG, "$sourceName: min_sep_ms=$minSepMs < 0; clamped to 0"); minSepMs = 0 }
+        if (smoothing  < 0) { Log.w(TAG, "$sourceName: smoothing=$smoothing < 0; clamped to 0");    smoothing  = 0  }
+        if (minRun     < 0) { Log.w(TAG, "$sourceName: min_run=$minRun < 0; clamped to 0");         minRun     = 0  }
+        if (cooldownMs < 0) { Log.w(TAG, "$sourceName: cooldown_ms=$cooldownMs < 0; clamped to 0"); cooldownMs = 0L }
+        if (minSepMs   < 0) { Log.w(TAG, "$sourceName: min_sep_ms=$minSepMs < 0; clamped to 0");   minSepMs   = 0L }
 
         return ModelProfile(
             profile = profileName,
@@ -342,9 +293,9 @@ object ModelConfigs {
         if (!v2.isNaN()) return v2
 
         val altKey = when (key) {
-            "hop_s" -> "hop_sec"
+            "hop_s"     -> "hop_sec"
             "win_len_s" -> "win_len_sec"
-            else -> null
+            else        -> null
         }
         if (altKey != null) {
             val v3 = json.optDouble(altKey, Double.NaN)
@@ -354,13 +305,7 @@ object ModelConfigs {
     }
 
     private fun readEventUpper(json: JSONObject): String? {
-        val keys = listOf(
-            "event",
-            "export_event",
-            "exportEvent",
-            "exported_event",
-            "model_event"
-        )
+        val keys = listOf("event", "export_event", "exportEvent", "exported_event", "model_event")
         for (k in keys) {
             val s = json.optString(k, "").trim()
             if (s.isNotEmpty() && !s.equals("unknown", ignoreCase = true)) {
@@ -375,7 +320,7 @@ object ModelConfigs {
         return when {
             "takeoff" in t -> "TAKEOFF"
             "landing" in t -> "LANDING"
-            else -> null
+            else           -> null
         }
     }
 
@@ -387,7 +332,8 @@ object ModelConfigs {
         val root = JSONTokener(text).nextValue()
         return when (root) {
             is JSONObject -> {
-                val version = root.optString("version", root.optString("schema_version", null))
+                // optString requires a non-null fallback; use "" and convert blank to null.
+                val version = root.optString("version", root.optString("schema_version", ""))
                     .ifBlank { null }
 
                 val arr = root.optJSONArray("features")
@@ -410,101 +356,12 @@ object ModelConfigs {
     }
 
     // ------------------------------------------------------------
-    // Medians helpers (JSON)
+    // scaler.npz parsers
     // ------------------------------------------------------------
-
-    private fun mediansFromObject(obj: JSONObject, schema: FeatureSchema, fname: String): DoubleArray {
-        val names = schema.names
-        val out = DoubleArray(names.size)
-        val missing = ArrayList<String>()
-        for ((i, name) in names.withIndex()) {
-            val v = getFlexibleDouble(obj, name)
-            if (v == null) missing += name else out[i] = v
-        }
-        if (missing.isNotEmpty()) {
-            val head = missing.take(8).joinToString(", ")
-            val more = missing.size - minOf(8, missing.size)
-            val suffix = if (more > 0) " … (+$more more)" else ""
-            throw IllegalArgumentException("$fname: missing/non-numeric medians for: $head$suffix")
-        }
-        return out
-    }
-
-    private fun mediansFromArray(arr: JSONArray, schema: FeatureSchema, fname: String): DoubleArray {
-        val names = schema.names
-        if (arr.length() != names.size) {
-            throw IllegalArgumentException("$fname: length ${arr.length()} != features ${names.size}")
-        }
-        val out = DoubleArray(names.size)
-        for (i in 0 until arr.length()) {
-            val v = when (val any = arr.get(i)) {
-                is Number -> any.toDouble()
-                is String -> any.trim().replace(',', '.').toDoubleOrNull()
-                else -> null
-            } ?: throw IllegalArgumentException("$fname: non-numeric median at index $i (feature ${names[i]})")
-            out[i] = v
-        }
-        return out
-    }
-
-    // ------------------------------------------------------------
-    // scaler.npz -> fill vector (median/center/mean) helpers
-    // ------------------------------------------------------------
-
-    /**
-     * Reads scaler.npz and tries to extract a 1D numeric vector used as a fill baseline.
-     * We look for common keys:
-     *  - median / medians
-     *  - center / center_
-     *  - location
-     *  - mean / mu
-     *
-     * Your exported StandardScaler artifact typically contains "mean" and "scale".
-     * Returning mean as the fill vector is fine (and stable).
-     */
-    private fun readFillVectorFromScalerNpz(npzStream: InputStream, expectedLen: Int): DoubleArray? {
-        val candidates = listOf(
-            "median", "medians",
-            "center", "center_",
-            "location",
-            "mean", "mu"
-        ).map { it.lowercase(Locale.US) }
-
-        val entries = HashMap<String, ByteArray>() // baseName -> npyBytes
-
-        ZipInputStream(npzStream).use { zis ->
-            while (true) {
-                val entry = zis.nextEntry ?: break
-                if (entry.isDirectory) continue
-                val name = entry.name ?: continue
-                if (!name.endsWith(".npy")) continue
-
-                val base = name.substringAfterLast('/').removeSuffix(".npy").lowercase(Locale.US)
-                entries[base] = zis.readAllBytesCompat()
-            }
-        }
-
-        // Direct candidate key match.
-        for (key in candidates) {
-            val bytes = entries[key] ?: continue
-            val arr = parseNpy1dToDouble(bytes) ?: continue
-            if (arr.size == expectedLen) return arr
-        }
-
-        // Heuristic match (contains substring)
-        for ((base, bytes) in entries) {
-            val hit = candidates.any { c -> base.contains(c) }
-            if (!hit) continue
-            val arr = parseNpy1dToDouble(bytes) ?: continue
-            if (arr.size == expectedLen) return arr
-        }
-
-        return null
-    }
 
     /**
      * Minimal .npy parser for 1D float32/float64 little-endian arrays.
-     * Supports .npy v1 and v2/v3 headers.
+     * Supports .npy format versions 1, 2, and 3.
      */
     private fun parseNpy1dToDouble(npyBytes: ByteArray): DoubleArray? {
         if (npyBytes.size < 12) return null
@@ -533,11 +390,12 @@ object ModelConfigs {
         if (headerStart + headerLen > npyBytes.size) return null
         val header = npyBytes.copyOfRange(headerStart, headerStart + headerLen).decodeToString()
 
-        val descr = Regex("'descr'\\s*:\\s*'([^']+)'").find(header)?.groupValues?.get(1) ?: return null
+        val descr   = Regex("'descr'\\s*:\\s*'([^']+)'").find(header)?.groupValues?.get(1) ?: return null
         val fortran = Regex("'fortran_order'\\s*:\\s*(True|False)").find(header)?.groupValues?.get(1) ?: "False"
         if (fortran == "True") return null
 
-        val shapeText = Regex("'shape'\\s*:\\s*\\(([^\\)]*)\\)").find(header)?.groupValues?.get(1) ?: return null
+        // [^)] is sufficient inside a character class; no escaping needed.
+        val shapeText = Regex("'shape'\\s*:\\s*\\(([^)]*)\\)").find(header)?.groupValues?.get(1) ?: return null
         val dims = shapeText.split(',')
             .map { it.trim() }
             .filter { it.isNotEmpty() }
@@ -568,6 +426,31 @@ object ModelConfigs {
         }
     }
 
+    /** Reads scaler.npz and extracts mean and scale arrays required for StandardScaler. */
+    private fun readScalerNpz(npzStream: InputStream, expectedLen: Int): Pair<DoubleArray, DoubleArray>? {
+        val entries = HashMap<String, ByteArray>()
+
+        ZipInputStream(npzStream).use { zis ->
+            while (true) {
+                val entry = zis.nextEntry ?: break
+                if (entry.isDirectory) continue
+                val name = entry.name ?: continue
+                if (!name.endsWith(".npy")) continue
+
+                val base = name.substringAfterLast('/').removeSuffix(".npy").lowercase(Locale.US)
+                entries[base] = zis.readAllBytesCompat()
+            }
+        }
+
+        val meanBytes  = entries["mean"]  ?: entries["center"]                    ?: return null
+        val scaleBytes = entries["scale"] ?: entries["std"] ?: entries["scale_"]  ?: return null
+
+        val mean  = parseNpy1dToDouble(meanBytes) ?.takeIf { it.size == expectedLen } ?: return null
+        val scale = parseNpy1dToDouble(scaleBytes)?.takeIf { it.size == expectedLen } ?: return null
+
+        return mean to scale
+    }
+
     private fun InputStream.readAllBytesCompat(): ByteArray {
         val baos = ByteArrayOutputStream()
         val buf = ByteArray(16 * 1024)
@@ -580,27 +463,8 @@ object ModelConfigs {
     }
 
     // ------------------------------------------------------------
-    // Shared JSON helpers
+    // JSON helpers
     // ------------------------------------------------------------
-
-    private fun needDouble(json: JSONObject, source: String, key: String, default: Double?): Double {
-        getFlexibleDouble(json, key)?.let { return it }
-        if (default != null) {
-            Log.w(TAG, "$source: '$key' missing/non-numeric. Using default=$default")
-            return default
-        }
-        throw IllegalArgumentException("$source: missing/non-numeric '$key'")
-    }
-
-    private fun needInt(json: JSONObject, source: String, key: String, default: Int?): Int {
-        getFlexibleDouble(json, key)?.let { return it.toInt() }
-        json.optString(key, "").trim().toIntOrNull()?.let { return it }
-        if (default != null) {
-            Log.w(TAG, "$source: '$key' missing/non-numeric. Using default=$default")
-            return default
-        }
-        throw IllegalArgumentException("$source: missing/non-numeric '$key'")
-    }
 
     private fun getFlexibleDouble(json: JSONObject, key: String): Double? {
         if (!json.has(key) || json.isNull(key)) return null
@@ -632,11 +496,11 @@ object ModelConfigs {
         for (i in 0 until arr.length()) {
             val v = arr.get(i)
             val s = when (v) {
-                is String -> v
+                is String     -> v
                 is JSONObject -> (
                         v.optString("name", v.optString("feature", v.optString("id", "")))
                         ).ifBlank { null }
-                else -> null
+                else          -> null
             } ?: throw IllegalArgumentException("features: element $i is not string or object-with-name")
             out += s
         }
@@ -736,68 +600,4 @@ object ModelConfigs {
         "LANDING" -> 0.60
         else      -> 0.75
     }
-
-
-    /**
-     * Load BOTH mean and scale arrays from scaler.npz.
-     *
-     * CRITICAL: Python exports StandardScaler as:
-     *   np.savez("scaler.npz", mean=..., scale=...)
-     *
-     * Android needs BOTH for proper scaling: (x - mean) / scale
-     */
-    @JvmStatic
-    fun parseScaler(context: Context, schema: FeatureSchema, isTakeoff: Boolean): Pair<DoubleArray, DoubleArray> {
-        val (event, dir) = eventAndDir(isTakeoff)
-
-        val scalerName = tryPickAssetOrNull(
-            context = context,
-            dir = dir,
-            preferredNames = listOf("scaler.npz"),
-            suffixes = listOf(".npz")
-        ) ?: throw IllegalArgumentException("$event: scaler.npz not found in @$dir")
-
-        context.assets.open("$dir/$scalerName").use { stream ->
-            val (mean, scale) = readScalerNpz(stream, expectedLen = schema.names.size)
-                ?: throw IllegalArgumentException("$event: failed to parse scaler.npz")
-
-            Log.i(TAG, "$event scaler: mean[0]=${mean[0]}, scale[0]=${scale[0]} (file=$scalerName)")
-            return mean to scale
-        }
-    }
-
-    /**
-     * Parse scaler.npz and extract BOTH mean and scale arrays.
-     */
-    private fun readScalerNpz(npzStream: InputStream, expectedLen: Int): Pair<DoubleArray, DoubleArray>? {
-        val entries = HashMap<String, ByteArray>() // baseName -> npyBytes
-
-        ZipInputStream(npzStream).use { zis ->
-            while (true) {
-                val entry = zis.nextEntry ?: break
-                if (entry.isDirectory) continue
-                val name = entry.name ?: continue
-                if (!name.endsWith(".npy")) continue
-
-                val base = name.substringAfterLast('/').removeSuffix(".npy").lowercase(Locale.US)
-                entries[base] = zis.readAllBytesCompat()
-            }
-        }
-
-        // Extract mean array
-        val meanBytes = entries["mean"] ?: entries["center"] ?: return null
-        val mean = parseNpy1dToDouble(meanBytes) ?: return null
-        if (mean.size != expectedLen) return null
-
-        // Extract scale array
-        val scaleBytes = entries["scale"] ?: entries["std"] ?: entries["scale_"] ?: return null
-        val scale = parseNpy1dToDouble(scaleBytes) ?: return null
-        if (scale.size != expectedLen) return null
-
-        return mean to scale
-    }
-
-
-
-
 }

@@ -1,31 +1,15 @@
 package com.example.flightcue.data.modelspec
 
+/** Central location for asset paths and log file configuration. */
 object AppPaths {
+
+    // ---- Model asset directories (under assets/) ----
     const val TAKEOFF_DIR = "models/gru/takeoff"
     const val LANDING_DIR = "models/gru/landing"
 
-    //NOT USED these under!
-    const val MODEL_FILE_TO = "takeoff_0815.onnx"
-    const val FEATURES_FILE_TO = "takeoff_0815.landing.takeoff.features.json"
-    const val MEDIANS_FILE_TO = "takeoff_0815.medians.json"
-    const val PROFILE_FILE_TO = "takeoff_0815.profile.json"
-
-    const val MODEL_FILE_LD = "landing_0776.onnx"
-    const val FEATURES_FILE_LD = "landing_0776.landing.takeoff.features.json"
-    const val MEDIANS_FILE_LD = "landing_0776.medians.json"
-    const val PROFILE_FILE_LD = "landing_0776.profile.json"
-
-    const val EVENT_TAKEOFF = "TAKEOFF"
-    const val EVENT_LANDING = "LANDING"
-    //NOT USED these over!
-
-    const val FGS_CHANNEL_ID = "flightcue_monitoring"
-    const val FGS_CHANNEL_NAME = "Flight monitoring"
-    const val FGS_NOTIFICATION_ID = 1001
-
-    // ---- Sprint C: Local event log ----
-    const val LOG_DIR_NAME = "flight_logs"
+    // ---- Local event log ----
+    const val LOG_DIR_NAME  = "flight_logs"
     const val LOG_FILE_BASE = "flightlog.jsonl"
-    const val LOG_MAX_BYTES: Long = 5L * 1024L * 1024L // 5 MB
-    const val LOG_KEEP: Int = 2                         // flightlog.1.jsonl .. flightlog.2.jsonl
+    const val LOG_MAX_BYTES: Long = 5L * 1024L * 1024L  // rotate at 5 MB
+    const val LOG_KEEP: Int = 2                          // flightlog.1.jsonl .. flightlog.2.jsonl
 }

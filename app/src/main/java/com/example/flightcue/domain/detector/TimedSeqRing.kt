@@ -60,13 +60,6 @@ class TimedSeqRing(private val seqLen: Int, private val nFeat: Int) {
         return flatBuffer
     }
 
-    /** Get t_end at index counted from oldest (0..seqLen-1). */
-    fun tEndAt(idxFromOldest: Int): Double {
-        require(isFull()) { "TimedSeqRing.tEndAt: not full" }
-        require(idxFromOldest in 0 until seqLen) { "tEndAt idx=$idxFromOldest out of range" }
-        val slot = (head + idxFromOldest) % seqLen
-        return tEnd[slot]
-    }
 
     /** Get t_anchor at index counted from oldest (0..seqLen-1). */
     fun tAnchorAt(idxFromOldest: Int): Double {

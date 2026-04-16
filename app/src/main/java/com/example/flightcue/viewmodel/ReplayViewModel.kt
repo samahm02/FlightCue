@@ -18,11 +18,12 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-// ReplayViewModel.kt
-// ViewModel for the replay screen.
-// Manages file selection, runs ReplayRunner on a background thread, and exposes
-// progress and results to the UI via StateFlow.
 
+/**
+ * ViewModel for the replay screen.
+ * Manages file selection, runs ReplayRunner on a background thread, and exposes
+ * progress and results to the UI via StateFlow.
+ */
 class ReplayViewModel(app: Application) : AndroidViewModel(app) {
 
     private val repo = ReplayRepository()
@@ -146,4 +147,3 @@ class ReplayViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
 }
-//17

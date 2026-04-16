@@ -1,23 +1,25 @@
-package com.example.flightcue.domain.util
+package com.example.flightcue.domain.features
 
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.cos
 import kotlin.math.floor
-import kotlin.math.min
 import kotlin.math.pow
 import kotlin.math.sin
 import kotlin.math.sqrt
 
-// Python-parity helpers: all stats ignore non-finite values.
-// Notes:
-// - ddof=0 everywhere (matches NumPy std(..., ddof=0))
-// - slope filters finite pairs
+/**
+ * Python-parity math helpers used for feature extraction.
+ * All statistics operate on finite values only — NaN and Infinity are silently skipped,
+ * matching NumPy's `arr[np.isfinite(arr)]` pattern.
+ * ddof=0 everywhere (matches NumPy std default).
+ */
 object FeatureMath {
 
     // ---------- finite-only utilities ----------
 
+    /** Returns a copy of [x] with all non-finite values removed. */
     private fun finiteCopy(x: DoubleArray): DoubleArray {
         var c = 0
         for (v in x) if (v.isFinite()) c++
@@ -77,6 +79,7 @@ object FeatureMath {
         return if (n % 2 == 1) a[n / 2] else 0.5 * (a[n / 2 - 1] + a[n / 2])
     }
 
+    /** Linear percentile interpolation on a pre-sorted finite array. */
     private fun pctSorted(sorted: DoubleArray, p: Double): Double {
         if (sorted.isEmpty()) return Double.NaN
         val pos = (p / 100.0) * (sorted.size - 1)
@@ -87,6 +90,7 @@ object FeatureMath {
         return (1 - w) * sorted[lo] + w * sorted[hi]
     }
 
+    /** Interquartile range (75th − 25th percentile) on finite values. */
     fun iqr(x: DoubleArray): Double {
         val a = finiteCopy(x)
         if (a.isEmpty()) return Double.NaN
@@ -117,6 +121,7 @@ object FeatureMath {
         return m3 / sd.pow(3.0)
     }
 
+    /** Excess kurtosis (Fisher definition, −3) on finite values. */
     fun kurtEx(x: DoubleArray): Double {
         val a = finiteCopy(x)
         val n = a.size
@@ -130,6 +135,7 @@ object FeatureMath {
         return (m4 / sd.pow(4.0)) - 3.0
     }
 
+    /** Mean difference between the second and first half of finite values. */
     fun halfDiff(x: DoubleArray): Double {
         val a = finiteCopy(x)
         val n = a.size
@@ -140,6 +146,7 @@ object FeatureMath {
         return mean(second) - mean(first)
     }
 
+    /** Mean difference between the last and first third of finite values. */
     fun thirdDiff(x: DoubleArray): Double {
         val a = finiteCopy(x)
         val n = a.size
@@ -151,6 +158,7 @@ object FeatureMath {
         return mean(last) - mean(first)
     }
 
+    /** Count of samples more than k standard deviations from the mean. */
     fun peakCount(x: DoubleArray, k: Double = 2.0): Double {
         val a = finiteCopy(x)
         if (a.isEmpty()) return 0.0
@@ -190,6 +198,7 @@ object FeatureMath {
         return if (dur > 0) zc.toDouble() / dur else 0.0
     }
 
+    /** Longest run of true values in [mask], converted to seconds using [hz]. */
     fun runLenSec(mask: BooleanArray, hz: Double): Double {
         var best = 0
         var cur = 0
@@ -204,8 +213,9 @@ object FeatureMath {
         return best.toDouble() / hz
     }
 
+    /** Ordinary least-squares slope over finite (t, y) pairs. */
     fun slope(t: DoubleArray, y: DoubleArray): Double {
-        val n = min(t.size, y.size)
+        val n = kotlin.math.min(t.size, y.size)
         if (n < 2) return Double.NaN
 
         var c = 0
@@ -242,39 +252,6 @@ object FeatureMath {
     // We use radix-2 FFT with zero padding to next pow2 (fast).
     // Hann window is applied over the true length n (Python does Hann over n).
     // This is a close approximation to NumPy rfft for relative band power.
-
-
-
-    fun rfftPower2(xIn: DoubleArray, fs: Double): Pair<DoubleArray, DoubleArray> {
-        val x = finiteCopy(xIn)
-        val n = x.size
-        if (n < 8) return DoubleArray(0) to DoubleArray(0)
-
-        val mu = mean(x)
-        // Hann window + mean removal — matches Python np.hanning(n) and x - mean(x)
-        val w = DoubleArray(n) { i ->
-            val v = x[i] - mu
-            val hann = 0.5 * (1.0 - cos(2.0 * Math.PI * i.toDouble() / (n - 1).toDouble()))
-            v * hann
-        }
-
-        // Direct DFT — exact n-point, no zero-padding, matches Python np.fft.rfft
-        val outN = n / 2 + 1
-        val f = DoubleArray(outN) { k -> k.toDouble() * fs / n.toDouble() }
-        val p = DoubleArray(outN) { k ->
-            var re = 0.0
-            var im = 0.0
-            val step = -2.0 * Math.PI * k / n
-            for (j in 0 until n) {
-                val angle = step * j
-                re += w[j] * cos(angle)
-                im += w[j] * sin(angle)
-            }
-            re * re + im * im
-        }
-        return f to p
-    }
-
     fun rfftPower(xIn: DoubleArray, fs: Double): Pair<DoubleArray, DoubleArray> {
         val x = finiteCopy(xIn)
         val n = x.size
@@ -330,8 +307,10 @@ object FeatureMath {
         }
         return out
     }
+
+    /** Formats a band range as a feature map key, e.g. "pow_0.3_1.0". */
     private fun key(lo: Double, hi: Double): String =
-        "pow_${String.format(Locale.US, "%.1f", lo)}_${String.format(Locale.US, "%.1f", hi)}"
+        "pow_${String.Companion.format(Locale.US, "%.1f", lo)}_${String.Companion.format(Locale.US, "%.1f", hi)}"
 
 
     // ---------- RECENCY FEATURES ----------
@@ -342,7 +321,7 @@ object FeatureMath {
      */
     fun recentSlope(arr: DoubleArray, hz: Double, recentS: Double = 2.0): Double {
         if (arr.isEmpty()) return Double.NaN
-        val recentSamples = min(arr.size, kotlin.math.max(3, (recentS * hz).toInt()))
+        val recentSamples = kotlin.math.min(arr.size, kotlin.math.max(3, (recentS * hz).toInt()))
         val recent = arr.copyOfRange(kotlin.math.max(0, arr.size - recentSamples), arr.size)
 
         val t = DoubleArray(recent.size) { i -> i.toDouble() / hz }
@@ -355,7 +334,7 @@ object FeatureMath {
      */
     fun recentStd(arr: DoubleArray, hz: Double, recentS: Double = 2.0): Double {
         if (arr.isEmpty()) return Double.NaN
-        val recentSamples = min(arr.size, kotlin.math.max(3, (recentS * hz).toInt()))
+        val recentSamples = kotlin.math.min(arr.size, kotlin.math.max(3, (recentS * hz).toInt()))
         val recent = arr.copyOfRange(kotlin.math.max(0, arr.size - recentSamples), arr.size)
         return std(recent)
     }
@@ -366,7 +345,7 @@ object FeatureMath {
      */
     fun recentMean(arr: DoubleArray, hz: Double, recentS: Double = 2.0): Double {
         if (arr.isEmpty()) return Double.NaN
-        val recentSamples = min(arr.size, kotlin.math.max(1, (recentS * hz).toInt()))
+        val recentSamples = kotlin.math.min(arr.size, kotlin.math.max(1, (recentS * hz).toInt()))
         val recent = arr.copyOfRange(kotlin.math.max(0, arr.size - recentSamples), arr.size)
         return mean(recent)
     }
@@ -377,7 +356,7 @@ object FeatureMath {
      */
     fun recentMaxAbs(arr: DoubleArray, hz: Double, recentS: Double = 2.0): Double {
         if (arr.isEmpty()) return Double.NaN
-        val recentSamples = min(arr.size, kotlin.math.max(1, (recentS * hz).toInt()))
+        val recentSamples = kotlin.math.min(arr.size, kotlin.math.max(1, (recentS * hz).toInt()))
         val recent = arr.copyOfRange(kotlin.math.max(0, arr.size - recentSamples), arr.size)
 
         var maxAbs = Double.NEGATIVE_INFINITY
@@ -418,7 +397,7 @@ object FeatureMath {
         val a = finiteCopy(arr)
         if (a.size < 4) return Double.NaN
 
-        val recentSamples = min(arr.size, kotlin.math.max(3, (recentS * hz).toInt()))
+        val recentSamples = kotlin.math.min(arr.size, kotlin.math.max(3, (recentS * hz).toInt()))
         val recent = arr.copyOfRange(kotlin.math.max(0, arr.size - recentSamples), arr.size)
         val recentFinite = finiteCopy(recent)
 

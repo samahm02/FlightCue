@@ -2,7 +2,6 @@ package com.example.flightcue.domain.features
 
 import com.example.flightcue.domain.timeseries.AccelResampled
 import com.example.flightcue.domain.timeseries.BaroResampled
-import com.example.flightcue.domain.util.FeatureMath
 import com.example.flightcue.domain.util.Params
 import kotlin.math.abs
 import kotlin.math.max
@@ -10,23 +9,21 @@ import kotlin.math.pow
 import kotlin.math.sqrt
 
 /**
- * Runtime feature extraction matching `preprocess_all_data_causal_fixed_v5_final.py` (best-effort parity).
+ * Feature extraction matching the Python preprocessing pipeline.
  *
- * What this file assumes is already handled elsewhere (your Resample.kt / windowing):
- * - Causal bin-mean resampling + bounded forward-hold (gap limit)
- * - Window slicing already produces per-window AccelResampled/BaroResampled
+ * Assumes resampling and window slicing are already done (see Resample.kt):
+ * - Causal bin-mean resampling with bounded forward-hold
+ * - Window slicing produces per-window AccelResampled/BaroResampled
  *
- * Key parity points with the Python you pasted:
- * - Pressure stays pressure everywhere (`p_*`, `dpdt_*`, `p_ema30_*`). Altitude is only an internal intermediate for `dhdt`.
- * - Gravity alignment uses EMA that *skips NaNs and outputs NaN on NaN* (no unlimited forward fill).
- * - `dyn(t) = amag(t) - EMA_skipnan(amag(t), tau=2s)`; outputs NaN when amag is NaN.
- * - `amag_ema10` is EMA-mean (tau=10s), `amag_emaVar10` is EMA-variance (tau=10s) as in Python (NOT rolling windows).
- * - `p_ema30` is EMA-mean (tau=30s); `p_ema30_dt1` is its discrete derivative, padded like Python.
- * - `dhdt` is computed from pressure->altitude conversion only to get a derivative; smoothed with EMA_skipnan (tau=2s)
- *   and preserves NaNs (no missing→0 conversion).
- * - Window stats:
- *   - accel stats use m3 gating (ax/ay/az must be finite together)
- *   - most *_mean/std/etc use finite-only arrays (like Python’s `arr[np.isfinite(arr)]`)
+ * Key implementation notes:
+ * - Pressure is used directly for all p_* features. Altitude is only an
+ *   internal intermediate for computing dhdt.
+ * - Gravity alignment uses a skip-NaN EMA (no forward fill into gaps).
+ * - dyn = amag - EMA_skipnan(amag, tau=2s); NaN when amag is NaN.
+ * - amag_ema10 and amag_emaVar10 use EMA (tau=10s), not rolling windows.
+ * - p_ema30 uses EMA (tau=30s); p_ema30_dt1 is its discrete derivative.
+ * - dhdt preserves NaNs throughout — missing values are not converted to zero.
+ * - Accel stats use m3 gating: all three axes must be finite together.
  */
 object Features {
 
@@ -47,7 +44,7 @@ object Features {
 
     class BaroDerived(
         val t: DoubleArray,
-        val p: DoubleArray,            // ✅ PRESSURE (Pa or hPa consistently with training)
+        val p: DoubleArray,            // PRESSURE (Pa or hPa consistently with training)
         val dhdt: DoubleArray,         // climb rate proxy from pressure-derived altitude (m/s)
         val pEma30: DoubleArray,        // EMA mean of pressure (tau=30s)
         val pEma30dt1: DoubleArray      // discrete derivative of pEma30, padded like Python
@@ -75,7 +72,7 @@ object Features {
         val amagEma10 = emaMeanSkipNanOutNan(amag, hz, tauS = 10.0)
 
         // Python: amag_emaVar10 = ema_var with tau=10s (EMA mean + EMA variance), skipnan, output NaN on NaN
-        val amagEmaVar10 = emaVarSkipNanOutNan(amag, hz, tauS = 10.0)
+        val amagEmaVar10 = emaVarSkipNanOutNan(amag, hz)
 
         // Gravity estimate: Python uses ema_series_skipnan on each axis (tau ~ 0.6s)
         val aGrav = alphaFromTau(hz, Params.GRAV_TAU_S)
@@ -208,7 +205,7 @@ object Features {
             emaSkipNanOutNan(dh, aDh)
         }
 
-        // ✅ RETURN PRESSURE (not altitude)
+        // Returns pressure directly; altitude is only used internally to compute dhdt.
         return BaroDerived(
             t = r.t,
             p = p,
@@ -260,7 +257,7 @@ object Features {
         }
 
         fun putStats(name: String, arr: DoubleArray) {
-            // arr is already finite-only in our calls for accel (m3 gating), matching Python
+            // already finite-only via m3 gating above
             out["${name}_mean"] = FeatureMath.mean(arr)
             out["${name}_std"] = FeatureMath.std(arr)
             out["${name}_min"] = FeatureMath.min(arr)
@@ -515,7 +512,7 @@ object Features {
         out["amag_ratio_1_3__0.3_1"] = safeDiv(out["pow_1.0_3.0"], out["pow_0.3_1.0"])
         out["dyn_ratio_2_5__0.5_2"] = safeDiv(out["dyn_pow_2.0_5.0"], out["dyn_pow_0.5_2.0"])
 
-        // FIX: ?: 0.0 doesn't handle NaN (NaN is not null), use takeIf { isFinite() } ?: 0.0
+        // NaN is not null, so ?: 0.0 alone would not handle NaN — use takeIf { isFinite() } first.
         fun getOrZero(key: String) = out[key]?.takeIf { it.isFinite() } ?: 0.0
 
         val pGround = getOrZero("pow_8.0_15.0") + getOrZero("pow_3.0_8.0")
@@ -657,9 +654,9 @@ object Features {
     // Helpers (EMA + units)
     // -------------------------------------------------------------------------
 
+    /** Converts a time constant (seconds) to an EMA alpha, matching Python: alpha = 2 / (1 + tau_s * hz). */
     private fun alphaFromTau(hz: Double, tauS: Double): Double {
         if (hz <= 0.0) return 1.0
-        // Python: alpha = 2 / (1 + tau_s * hz)
         return (2.0 / (1.0 + tauS * hz)).coerceIn(0.0, 1.0)
     }
 
@@ -675,16 +672,17 @@ object Features {
     }
 
     /**
-     * EMA variance (tau) matching Python `ema_var()`:
-     * - EMA mean `m[i]` updates only when x[i] finite; else m[i] stays NaN
-     * - EMA variance state updates only when x[i] and m[i] finite; else output NaN
+     * EMA variance matching Python `ema_var()`, with skip-NaN behavior:
+     * - EMA mean updates only on finite inputs; outputs NaN otherwise.
+     * - EMA variance updates only when both input and mean are finite; outputs NaN otherwise.
+     * - tau is fixed at 10s (matches amag_emaVar10 in the Python pipeline).
      */
-    private fun emaVarSkipNanOutNan(xIn: DoubleArray, hz: Double, tauS: Double): DoubleArray {
+    private fun emaVarSkipNanOutNan(xIn: DoubleArray, hz: Double): DoubleArray {
         if (xIn.isEmpty()) return DoubleArray(0)
-        val a = alphaFromTau(hz, tauS)
+        val a = alphaFromTau(hz, tauS = 10.0)
         val x = xIn
 
-        // EMA mean stream (NaN where x is NaN)
+        // Pass 1: EMA mean stream — NaN where input is NaN.
         val m = DoubleArray(x.size) { Double.NaN }
         var mu = Double.NaN
         for (i in x.indices) {
@@ -695,7 +693,7 @@ object Features {
             }
         }
 
-        // EMA variance (NaN where x is NaN)
+        // Pass 2: EMA variance — NaN where input or mean is NaN.
         val v = DoubleArray(x.size) { Double.NaN }
         var var0 = 0.0
         for (i in x.indices) {
@@ -743,11 +741,16 @@ object Features {
         return out
     }
 
+    /** Returns the first finite value in [x], or null if none exist. */
     private fun firstFinite(x: DoubleArray): Double? {
         for (v in x) if (v.isFinite()) return v
         return null
     }
 
+    /**
+     * Converts raw accelerometer axes to m/s² if needed.
+     * AUTO mode uses the median magnitude to heuristically detect g-unit input (median ≈ 1.0).
+     */
     private fun normalizeAccelUnits(
         ax: DoubleArray, ay: DoubleArray, az: DoubleArray,
         units: AccelUnits

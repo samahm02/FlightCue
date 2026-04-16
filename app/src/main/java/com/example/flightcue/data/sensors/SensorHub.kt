@@ -7,9 +7,16 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.Handler
 import android.util.Log
-import com.example.flightcue.domain.events.FlightState
 import com.example.flightcue.domain.util.Params
 
+/**
+ * Registers and manages accelerometer and barometer sensors.
+ * Sensor callbacks are forwarded to [onAccel] and [onBaro] on the provided [callbackHandler]
+ * thread, or the calling thread if no handler is given.
+ *
+ * Both sensors are always active; sensor registration is not state-dependent because
+ * the ML pipeline uses both modalities for takeoff and landing detection.
+ */
 class SensorHub(
     context: Context,
     private val onAccel: (tSec: Double, ax: Double, ay: Double, az: Double) -> Unit,
@@ -18,13 +25,13 @@ class SensorHub(
     private val callbackHandler: Handler? = null
 ) : SensorEventListener {
 
-    private val sm = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
-    private val accel: Sensor? = sm.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
-    private val baro: Sensor? = sm.getDefaultSensor(Sensor.TYPE_PRESSURE)
+    private val sm    = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
+    private val accel = sm.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+    private val baro  = sm.getDefaultSensor(Sensor.TYPE_PRESSURE)
 
     private var registered = false
 
-    // rate logging
+    // Rate-logging state (only used when logRates = true)
     private var accCount = 0
     private var accWindowStartNs = 0L
     private var baroCount = 0
@@ -35,46 +42,38 @@ class SensorHub(
         private const val RATE_LOG_WINDOW_NS = 2_000_000_000L
     }
 
+    /** Unregisters all sensors and resets rate-logging counters. */
     fun unregisterAll() {
         runCatching { sm.unregisterListener(this) }
         registered = false
-
-        // reset rate stats too
-        accCount = 0
-        baroCount = 0
-        accWindowStartNs = 0L
-        baroWindowStartNs = 0L
+        accCount = 0; baroCount = 0
+        accWindowStartNs = 0L; baroWindowStartNs = 0L
     }
 
-    /**
-     * Registers the sensors needed by the detector exactly once.
-     *
-     * The ML pipeline uses both accelerometer and barometer features for both events,
-     * so sensor registration is not state-dependent.
-     *
-     */
+    /** Registers both sensors. No-op if already registered. */
     fun ensureRegistered() {
         if (registered) return
-
-        startAccel(Params.ACCEL_HZ, batchSec = Params.SENSOR_BATCH_SEC)
-        startBaro(Params.BARO_HZ, batchSec = Params.SENSOR_BATCH_SEC)
-
+        startAccel()
+        startBaro()
         registered = true
         Log.i(TAG, "Sensors registered (accel=${accel != null}, baro=${baro != null})")
     }
 
-    private fun startAccel(rateHz: Double, batchSec: Int) {
-        val periodUs = hzToPeriodUs(rateHz)
-        val latencyUs = batchSec * 1_000_000
+    private fun startAccel() {
+        val periodUs  = hzToPeriodUs(Params.ACCEL_HZ)
+        // latencyUs tells the hardware how long it may batch samples before
+        // flushing to the app. Larger values reduce wake-ups at the cost of latency.
+        val latencyUs = Params.SENSOR_BATCH_SEC * 1_000_000
         accel?.let {
             if (callbackHandler != null) sm.registerListener(this, it, periodUs, latencyUs, callbackHandler)
             else sm.registerListener(this, it, periodUs, latencyUs)
         }
     }
 
-    private fun startBaro(rateHz: Double, batchSec: Int) {
-        val periodUs = hzToPeriodUs(rateHz)
-        val latencyUs = batchSec * 1_000_000
+    private fun startBaro() {
+        val periodUs  = hzToPeriodUs(Params.BARO_HZ)
+        // Same batching window as accel — both sensors flush on the same schedule.
+        val latencyUs = Params.SENSOR_BATCH_SEC * 1_000_000
         baro?.let {
             if (callbackHandler != null) sm.registerListener(this, it, periodUs, latencyUs, callbackHandler)
             else sm.registerListener(this, it, periodUs, latencyUs)

@@ -3,8 +3,8 @@ package com.example.flightcue.ml
 import com.example.flightcue.domain.predict.Predictor
 
 /**
- * Thin adapter so the core doesn't know about OrtSessionManager.
- * Assumes OrtSessionManager.init(context) has been called elsewhere.
+ * Thin adapter between [Predictor] and [OrtSessionManager].
+ * Assumes [OrtSessionManager.init] has been called before any score calls.
  */
 class OnnxPredictor(
     private val ort: OrtSessionManager

@@ -14,7 +14,9 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.flightcue.domain.events.FlightDomainEvent
 import com.example.flightcue.domain.events.FlightState
+import com.example.flightcue.viewmodel.DetectionViewModel
 
+/** Main screen showing live flight state, last detected event, and the manual override button. */
 @Composable
 fun HomeScreen(vm: DetectionViewModel = viewModel(factory = DetectionViewModel.Factory)) {
     val state by vm.flightState.collectAsState()

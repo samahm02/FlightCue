@@ -1,13 +1,16 @@
 package com.example.flightcue.domain.timeseries
 
-import kotlin.math.ceil
-import kotlin.math.max
 
-// Irregular → fixed-rate CAUSAL resampling (Python parity):
-// - grid tg from t0..tN step=1/hz
-// - value at tg is mean of raw samples in (tg-step, tg] (past-only)
-// - if no samples: bounded forward-fill using gapFactor * median_dt (fallback: gapFactor * step)
-// - no interpolation
+/**
+ * Resamples irregular sensor data onto a fixed-rate causal grid.
+ *
+ * Each grid point holds the mean of all raw samples that fall within
+ * its bin. If a bin has no samples, the last known value is carried
+ * forward — but only up to gapFactor × median sample interval. Beyond
+ * that gap the output is NaN. No interpolation is used.
+ *
+ * Matches the Python causal resampling pipeline.
+ */
 object Resample {
 
     fun accel(src: AccelSlice, hz: Double, gapFactor: Double): AccelResampled {
@@ -50,7 +53,7 @@ object Resample {
         }
         if (!tMin.isFinite() || !tMax.isFinite()) return DoubleArray(0)
 
-        // FIX: Python uses t0 = t_raw[0] directly, no ceiling alignment
+        // Grid starts at the first raw sample (matches Python's t0 = t_raw[0]).
         val t0 = tMin
         val n = maxOf(1, kotlin.math.floor((tMax - t0) / step + 0.5).toInt() + 1)
         return DoubleArray(n) { i -> t0 + i * step }
@@ -85,9 +88,8 @@ object Resample {
         val cnt = IntArray(grid.size)
         val lastTimeInBin = DoubleArray(grid.size) { Double.NaN }
 
-        // Inside causalResample, replace the binIndex lambda:
+        // Left-closed bins [tg, tg+step) matching Python's floor((t - t0) / step).
         fun binIndex(t: Double): Int {
-            // FIX: match Python's floor((t - t0) / step), left-closed bins [tg, tg+step)
             val idx = kotlin.math.floor((t - t0) / step).toInt()
             return idx.coerceIn(0, grid.lastIndex)
         }
@@ -137,5 +139,5 @@ object Resample {
     }
 }
 
-data class AccelResampled(val t: DoubleArray, val ax: DoubleArray, val ay: DoubleArray, val az: DoubleArray)
-data class BaroResampled(val t: DoubleArray, val p: DoubleArray)
+class AccelResampled(val t: DoubleArray, val ax: DoubleArray, val ay: DoubleArray, val az: DoubleArray)
+class BaroResampled(val t: DoubleArray, val p: DoubleArray)

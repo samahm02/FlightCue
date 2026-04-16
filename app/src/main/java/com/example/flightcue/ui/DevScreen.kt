@@ -21,6 +21,7 @@ import com.example.flightcue.viewmodel.ReplayViewModel
 import java.util.Locale
 import kotlin.math.abs
 
+/** Developer replay screen, pick a recording file, run it through the ML model, and inspect results. */
 @Composable
 fun DevScreen(vm: ReplayViewModel = viewModel()) {
     val uri          by vm.fileUri.collectAsState()

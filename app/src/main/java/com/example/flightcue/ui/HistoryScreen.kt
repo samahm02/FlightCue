@@ -18,6 +18,7 @@ import com.example.flightcue.viewmodel.HistoryViewModel
 import java.text.SimpleDateFormat
 import java.util.*
 
+/** Shows a scrollable list of past flights loaded from local log files. */
 @Composable
 fun HistoryScreen(
     modifier: Modifier = Modifier,

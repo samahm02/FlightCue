@@ -8,7 +8,6 @@ import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.os.Handler
 import android.os.HandlerThread
-import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -36,6 +35,18 @@ import java.util.Locale
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
+/**
+ * Top-level detection orchestrator (data layer).
+ *
+ * Responsibilities:
+ *  - Owns the lifecycle of [LiveDetection], [SensorHub], and [EventLogWriter].
+ *  - Runs a dedicated [HandlerThread] ("FlightCueDetector") so that sensor
+ *    callbacks and [LiveDetection.tick] never block the main thread.
+ *  - Forwards domain events from [AppBus] to system broadcasts and notifications.
+ *
+ * Call [start] once (e.g. from FlightCueService.onStartCommand) and [stop] when
+ * the service is destroyed. The class is not reusable after [stop].
+ */
 class DetectionEngine(private val appContext: Context) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -46,26 +57,26 @@ class DetectionEngine(private val appContext: Context) {
 
     @Volatile private var started = false
 
-    // dev-only behavior toggle for logs / parity
+    // Enabled only on debug builds; gates verbose logcat output and parity runner.
     @Volatile private var debugLogs = false
 
-    // Heavy init job
+    // Deferred heavy init (ORT session load, model file checks).
     private var initJob = scope.async { false }
 
-    // Dedicated detector thread: sensor callbacks + tick() happen here
+    // All sensor callbacks and tick() run on this thread to avoid main-thread work.
     private var detectorThread: HandlerThread? = null
     private var detectorHandler: Handler? = null
 
-    @Suppress("unused")
-    private val mainHandler = Handler(Looper.getMainLooper())
-
+    /**
+     * Periodic runnable that drives [LiveDetection.tick] at [TICK_PERIOD_MS] intervals.
+     * Runs on [detectorHandler] so it is serialised with sensor callbacks.
+     */
     private val tickRunnable = object : Runnable {
         override fun run() {
             val nowSec = SystemClock.elapsedRealtimeNanos() / 1e9
 
             try {
                 live?.tick(nowSec)?.let { d ->
-                    // dev-only logcat spam control
                     if (debugLogs) {
                         when (d.event) {
                             "TAKEOFF" -> Log.i(TAG, "TAKEOFF fired p=${"%.3f".format(d.p)} atSec=${"%.1f".format(d.atSec)}")
@@ -81,30 +92,29 @@ class DetectionEngine(private val appContext: Context) {
         }
     }
 
+    /**
+     * Initialises all detection components and begins sensor streaming.
+     * Safe to call from any thread. No-op if already started.
+     */
     fun start() {
         if (started) return
         started = true
 
-        val isDebug = (appContext.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
-        debugLogs = isDebug
+        debugLogs = (appContext.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
 
-        // Start detector thread first (needed for sensor callbacks)
+        // Detector thread must exist before sensor callbacks can be routed to it.
         detectorThread = HandlerThread("FlightCueDetector").apply { start() }
         detectorHandler = Handler(requireNotNull(detectorThread).looper)
 
+        // Heavy init (ORT session, model files) runs off the main thread.
         initJob = scope.async(Dispatchers.Default) {
             try {
                 ModelFiles.logInventory(appContext)
                 OrtSessionManager.init(appContext)
 
-                if (debugLogs && Params.ENABLE_MEDIAN_WARMUP) {
-                    OrtSessionManager.debugRunOnZeros()
-                }
-
                 val predictor = OnnxPredictor(OrtSessionManager)
 
                 val liveLocal = LiveDetection(
-                    context = appContext,
                     predictor = predictor,
                     eventPublisher = AppBus,
                     debug = debugLogs,
@@ -132,7 +142,7 @@ class DetectionEngine(private val appContext: Context) {
                     events = AppBus.events
                 ).also { it.start() }
 
-                Log.i(TAG, "Core ready (live + sensorHub). debugLogs=$debugLogs")
+                Log.i(TAG, "DetectionEngine ready. debugLogs=$debugLogs")
                 true
             } catch (t: Throwable) {
                 Log.e(TAG, "DetectionEngine init failed", t)
@@ -140,33 +150,25 @@ class DetectionEngine(private val appContext: Context) {
             }
         }
 
-        // After init: register sensors once + start ticker
+        // Once init completes: register sensors and start the tick loop.
         scope.launch {
-            val ok = initJob.await()
-            if (!ok) {
+            if (!initJob.await()) {
                 Log.e(TAG, "Init failed; DetectionEngine will not run.")
                 return@launch
             }
-
             detectorHandler?.post {
-                // SensorHub now keeps both accel + baro active.
-                // State no longer determines which sensors are registered.
                 sensorHub?.ensureRegistered()
                 startTickerLocked()
             }
         }
 
-        // Side-effects for all events (AUTO + manual)
+        // Translate all domain events (AUTO + FORCED) to broadcasts and notifications.
         scope.launch {
-            val ok = initJob.await()
-            if (!ok) return@launch
-
-            AppBus.events.collect { ev ->
-                handleFlightEvent(ev)
-            }
+            if (!initJob.await()) return@launch
+            AppBus.events.collect { ev -> handleFlightEvent(ev) }
         }
 
-        // Optional parity runner (dev-only)
+        // Parity runner is a dev-only self-test; only runs on debug builds.
         if (debugLogs) {
             scope.launch(Dispatchers.Default) {
                 try {
@@ -178,6 +180,10 @@ class DetectionEngine(private val appContext: Context) {
         }
     }
 
+    /**
+     * Stops sensor streaming, cancels the tick loop, and releases all resources.
+     * Blocks briefly (≤ 1.5 s) to let the detector thread flush cleanly.
+     */
     fun stop() {
         if (!started) return
         started = false
@@ -187,9 +193,7 @@ class DetectionEngine(private val appContext: Context) {
             try {
                 stopTickerLocked()
                 sensorHub?.unregisterAll()
-
-                val nowSec = SystemClock.elapsedRealtimeNanos() / 1e9
-                live?.reset(nowSec)
+                live?.reset(SystemClock.elapsedRealtimeNanos() / 1e9)
             } finally {
                 latch.countDown()
             }
@@ -208,45 +212,12 @@ class DetectionEngine(private val appContext: Context) {
         scope.cancel()
     }
 
-    private fun startTickerLocked() {
-        val h = detectorHandler ?: return
-        h.removeCallbacks(tickRunnable)
-        h.postDelayed(tickRunnable, TICK_PERIOD_MS)
-    }
+    // ---- Manual override entry points (called from UI via ViewModel) ----
 
-    private fun stopTickerLocked() {
-        detectorHandler?.removeCallbacks(tickRunnable)
-    }
-
-    // ---- translate domain events -> broadcasts + notifications ----
-
-    private fun handleFlightEvent(ev: FlightDomainEvent) {
-        sendBroadcastForEvent(ev)
-        postNotificationForEvent(ev)
-    }
-
-    private fun sendBroadcastForEvent(ev: FlightDomainEvent) {
-        val action = when (ev) {
-            is FlightDomainEvent.FlightStarted -> FlightIntents.ACTION_TAKEOFF_DETECTED
-            is FlightDomainEvent.FlightEnded -> FlightIntents.ACTION_LANDING_DETECTED
-        }
-
-        val intent = Intent(action).apply {
-            putExtra(FlightIntents.EXTRA_EVENT_MODE, ev.mode.name)
-            putExtra(FlightIntents.EXTRA_CONFIDENCE, ev.confidence)
-            putExtra(FlightIntents.EXTRA_AT_ELAPSED_SEC, ev.atSec)
-        }
-
-        appContext.sendBroadcast(intent)
-        if (debugLogs) {
-            Log.i(TAG, "Sent broadcast: $action mode=${ev.mode.name} atSec=${"%.1f".format(ev.atSec)}")
-        }
-    }
+    /** Publishes a forced takeoff event and advances the detector FSM. */
     fun forceTakeoff(confidence: Double = 1.0) {
         scope.launch {
-            val ok = initJob.await()
-            if (!ok) return@launch
-
+            if (!initJob.await()) return@launch
             val atSec = SystemClock.elapsedRealtimeNanos() / 1e9
             detectorHandler?.post {
                 live?.forceFlightStarted(
@@ -259,11 +230,10 @@ class DetectionEngine(private val appContext: Context) {
         }
     }
 
+    /** Publishes a forced landing event and advances the detector FSM. */
     fun forceLanding(confidence: Double = 1.0) {
         scope.launch {
-            val ok = initJob.await()
-            if (!ok) return@launch
-
+            if (!initJob.await()) return@launch
             val atSec = SystemClock.elapsedRealtimeNanos() / 1e9
             detectorHandler?.post {
                 live?.forceFlightEnded(
@@ -276,9 +246,48 @@ class DetectionEngine(private val appContext: Context) {
         }
     }
 
+    // ---- Private helpers ----
+
+    private fun startTickerLocked() {
+        val h = detectorHandler ?: return
+        h.removeCallbacks(tickRunnable)
+        h.postDelayed(tickRunnable, TICK_PERIOD_MS)
+    }
+
+    private fun stopTickerLocked() {
+        detectorHandler?.removeCallbacks(tickRunnable)
+    }
+
+    private fun handleFlightEvent(ev: FlightDomainEvent) {
+        sendBroadcastForEvent(ev)
+        postNotificationForEvent(ev)
+    }
+
+    private fun sendBroadcastForEvent(ev: FlightDomainEvent) {
+        val action = when (ev) {
+            is FlightDomainEvent.FlightStarted -> FlightIntents.ACTION_TAKEOFF_DETECTED
+            is FlightDomainEvent.FlightEnded   -> FlightIntents.ACTION_LANDING_DETECTED
+        }
+        val intent = Intent(action).apply {
+            putExtra(FlightIntents.EXTRA_EVENT_MODE, ev.mode.name)
+            putExtra(FlightIntents.EXTRA_CONFIDENCE, ev.confidence)
+            putExtra(FlightIntents.EXTRA_AT_ELAPSED_SEC, ev.atSec)
+        }
+        appContext.sendBroadcast(intent)
+        if (debugLogs) {
+            Log.i(TAG, "Broadcast: $action mode=${ev.mode.name} atSec=${"%.1f".format(ev.atSec)}")
+        }
+    }
+
+    /**
+     * Posts a heads-up notification for each detected or forced event.
+     * Note: notification logic lives here because DetectionEngine runs as a
+     * background service with no direct View layer.
+     */
     private fun postNotificationForEvent(ev: FlightDomainEvent) {
         val nm = appContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
+        // NotificationChannel is required on API 26+; minSdk satisfies this.
         val channel = NotificationChannel(
             EVENT_CHANNEL_ID,
             EVENT_CHANNEL_NAME,
@@ -286,29 +295,25 @@ class DetectionEngine(private val appContext: Context) {
         )
         nm.createNotificationChannel(channel)
 
-        val nowMs = System.currentTimeMillis()
-        val timeStr = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(nowMs))
+        val timeStr = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
 
         val (title, text) = when (ev) {
-            is FlightDomainEvent.FlightStarted -> {
-                val t = if (ev.mode == EventMode.AUTO) "Takeoff detected" else "Takeoff marked (manual)"
-                t to "Takeoff at $timeStr"
-            }
-            is FlightDomainEvent.FlightEnded -> {
-                val t = if (ev.mode == EventMode.AUTO) "Landing detected" else "Landing marked (manual)"
-                t to "Landing at $timeStr"
-            }
+            is FlightDomainEvent.FlightStarted ->
+                (if (ev.mode == EventMode.AUTO) "Takeoff detected" else "Takeoff marked (manual)") to
+                        "Takeoff at $timeStr"
+            is FlightDomainEvent.FlightEnded ->
+                (if (ev.mode == EventMode.AUTO) "Landing detected" else "Landing marked (manual)") to
+                        "Landing at $timeStr"
         }
 
         val tapIntent = Intent(appContext, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
-
-        val pendingFlags =
-            PendingIntent.FLAG_UPDATE_CURRENT or
-                    (PendingIntent.FLAG_IMMUTABLE)
-
-        val pending = PendingIntent.getActivity(appContext, 0, tapIntent, pendingFlags)
+        // FLAG_IMMUTABLE is required on API 23+; minSdk satisfies this.
+        val pending = PendingIntent.getActivity(
+            appContext, 0, tapIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
 
         val notif = NotificationCompat.Builder(appContext, EVENT_CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_dialog_info)
@@ -324,10 +329,11 @@ class DetectionEngine(private val appContext: Context) {
     companion object {
         private const val TAG = "DetectionEngine"
 
-        private const val EVENT_CHANNEL_ID = "flightcue_events"
+        private const val EVENT_CHANNEL_ID   = "flightcue_events"
         private const val EVENT_CHANNEL_NAME = "Flight events"
         private const val EVENT_NOTIFICATION_ID = 2001
 
+        /** How often [LiveDetection.tick] is called (milliseconds). */
         private const val TICK_PERIOD_MS = 1000L
     }
 }

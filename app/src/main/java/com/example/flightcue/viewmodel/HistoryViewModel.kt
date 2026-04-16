@@ -1,6 +1,7 @@
 package com.example.flightcue.viewmodel
 
 import android.app.Application
+import android.os.Build
 import android.os.FileObserver
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -24,6 +25,11 @@ data class FlightSummaryRow(
     val endMode: String
 )
 
+/**
+ * Loads and exposes flight summaries from the local JSONL log files.
+ * Watches the log directory with a FileObserver and refreshes automatically
+ * when files are created, modified, or rotated.
+ */
 class HistoryViewModel(app: Application) : AndroidViewModel(app) {
     private val _rows = MutableStateFlow<List<FlightSummaryRow>>(emptyList())
     val rows: StateFlow<List<FlightSummaryRow>> = _rows
@@ -37,13 +43,17 @@ class HistoryViewModel(app: Application) : AndroidViewModel(app) {
     // Debounce so we don’t parse the file on every single line append
     @Volatile private var refreshScheduled = false
 
-    private val observer: FileObserver = object : FileObserver(
-        logDir.absolutePath,
-        CREATE or MOVED_TO or MOVED_FROM or DELETE or CLOSE_WRITE or MODIFY
-    ) {
-        override fun onEvent(event: Int, path: String?) {
-            if (path != null && path.startsWith("flightlog")) {
-                scheduleRefresh()
+    private val observer: FileObserver = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        object : FileObserver(logDir, CREATE or MOVED_TO or MOVED_FROM or DELETE or CLOSE_WRITE or MODIFY) {
+            override fun onEvent(event: Int, path: String?) {
+                if (path != null && path.startsWith("flightlog")) scheduleRefresh()
+            }
+        }
+    } else {
+        @Suppress("DEPRECATION")
+        object : FileObserver(logDir.absolutePath, CREATE or MOVED_TO or MOVED_FROM or DELETE or CLOSE_WRITE or MODIFY) {
+            override fun onEvent(event: Int, path: String?) {
+                if (path != null && path.startsWith("flightlog")) scheduleRefresh()
             }
         }
     }

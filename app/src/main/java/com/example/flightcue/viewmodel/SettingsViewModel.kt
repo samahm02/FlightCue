@@ -1,4 +1,3 @@
-// file: app/src/main/java/com/example/flightcue/viewmodel/SettingsViewModel.kt
 package com.example.flightcue.viewmodel
 
 import android.app.Application
@@ -15,6 +14,10 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
+/**
+ * Exposes user settings from DataStore and provides actions for
+ * toggling detection, exporting logs, and clearing log files.
+ */
 class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     private val settings = SettingsStore(app)
 
@@ -28,7 +31,6 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setDetectionEnabled(on: Boolean) = viewModelScope.launch {
         settings.setDetectionEnabled(on)
-        // ✅ Do NOT start/stop service here (MainActivity already owns that)
     }
 
     fun exportLogs(context: Context) {
