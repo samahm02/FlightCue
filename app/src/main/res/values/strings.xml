@@ -2,4 +2,83 @@
     <string name="app_name">FlightCue</string>
     <string name="fgs_channel_name">FlightCue sensor detection</string>
 
+    <!-- SettingsScreen -->
+    <string name="settings_title">Settings</string>
+    <string name="settings_detection_title">Flight detection</string>
+    <string name="settings_detection_subtitle">Monitor sensors in the background</string>
+    <string name="settings_detection_note">Requires accelerometer and barometer.</string>
+    <string name="settings_data_export_section">Data &amp; export</string>
+    <string name="settings_export_button">Export flight logs (ZIP)</string>
+    <string name="settings_clear_button">Clear flight logs</string>
+    <string name="settings_clear_dialog_title">Clear flight logs?</string>
+    <string name="settings_clear_dialog_text">This deletes all local flight log files. This cannot be undone.</string>
+    <string name="settings_clear_dialog_confirm">Delete</string>
+    <string name="settings_clear_dialog_cancel">Cancel</string>
+    <string name="settings_logs_cleared_toast">Logs cleared</string>
+
+    <!-- HomeScreen -->
+    <string name="home_title">FlightCue</string>
+    <string name="home_flight_state_label">Flight state</string>
+    <string name="home_state_airborne">Airborne</string>
+    <string name="home_state_on_ground">On ground</string>
+    <string name="home_last_event_label">Last event</string>
+    <string name="home_no_events">No events yet</string>
+    <string name="home_event_takeoff">Takeoff detected</string>
+    <string name="home_event_landing">Landing detected</string>
+    <string name="home_button_mark_takeoff">Mark Takeoff (forced)</string>
+    <string name="home_button_mark_landing">Mark Landing (forced)</string>
+    <string name="home_event_meta">conf %.3f  •  t≈%.1fs</string>
+
+    <!-- ReplayViewModel -->
+    <string name="replay_selected">Selected: %s</string>
+    <string name="replay_no_file">No file selected</string>
+    <string name="replay_loading">Loading recording (this can take a bit for large files)…</string>
+    <string name="replay_fallback_name">recording</string>
+    <string name="replay_analyzing">Analyzing %s with ML model…</string>
+    <string name="replay_analysis_complete">Analysis complete</string>
+    <string name="replay_done">Replay done.</string>
+    <string name="replay_cancelled">Cancelled</string>
+    <string name="replay_failed">Replay failed</string>
+    <string name="replay_failed_reason">Replay failed: %s</string>
+
+    <!-- HistoryScreen -->
+    <string name="history_title">Flight history</string>
+    <string name="history_empty">No flights recorded yet.</string>
+    <string name="history_flight_id">Flight %s</string>
+    <string name="history_departed">Departed</string>
+    <string name="history_arrived">Arrived</string>
+    <string name="history_takeoff_chip">takeoff: %s</string>
+    <string name="history_landing_chip">landing: %s</string>
+
+    <!-- DevScreen -->
+    <string name="dev_title">Replay</string>
+    <string name="dev_pick_recording">Pick recording</string>
+    <string name="dev_pick_another">Pick another file</string>
+    <string name="dev_cancel">Cancel</string>
+    <string name="dev_run_again">Run again</string>
+    <string name="dev_messages_label">Messages</string>
+    <string name="dev_messages_empty">Pick a recording file to begin.</string>
+    <string name="dev_message_bullet">• %s</string>
+    <string name="dev_dialog_close">Close</string>
+    <string name="dev_dialog_title">Replay results</string>
+    <string name="dev_dialog_takeoff">Takeoff</string>
+    <string name="dev_dialog_landing">Landing</string>
+    <string name="dev_dialog_flights_detected">Complete flights detected: %d</string>
+    <string name="dev_result_detected">Detected</string>
+    <string name="dev_result_marker">Marker</string>
+    <string name="dev_result_delta">Δ</string>
+    <string name="dev_result_not_detected">not detected</string>
+    <string name="dev_result_no_marker">no marker</string>
+    <string name="dev_result_na">n/a</string>
+
+    <!-- MainActivity -->
+    <string name="main_notif_granted_toast">You will now see \'FlightCue running\' and flight event notifications.</string>
+    <string name="main_notif_denied_toast">FlightCue cannot run reliably in the background without a foreground notification. Enable notifications in system settings to use background detection.</string>
+
+    <!-- Navigation bar -->
+    <string name="nav_home">Home</string>
+    <string name="nav_history">History</string>
+    <string name="nav_settings">Settings</string>
+    <string name="nav_dev">Dev</string>
+
 </resources>

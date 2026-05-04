@@ -13,15 +13,17 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.flightcue.R
 import com.example.flightcue.data.replay.ReplaySummary
 import com.example.flightcue.viewmodel.ReplayViewModel
 import java.util.Locale
 import kotlin.math.abs
 
-/** Developer replay screen, pick a recording file, run it through the ML model, and inspect results. */
+/** Developer replay screen: pick a recording file, run it through the ML model, and inspect results. */
 @Composable
 fun DevScreen(vm: ReplayViewModel = viewModel()) {
     val uri          by vm.fileUri.collectAsState()
@@ -52,7 +54,7 @@ fun DevScreen(vm: ReplayViewModel = viewModel()) {
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             Text(
-                "Replay",
+                stringResource(R.string.dev_title),
                 style = MaterialTheme.typography.headlineMedium,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onBackground
@@ -82,7 +84,8 @@ fun DevScreen(vm: ReplayViewModel = viewModel()) {
                     )
                 ) {
                     Text(
-                        if (uri == null) "Pick recording" else "Pick another file",
+                        if (uri == null) stringResource(R.string.dev_pick_recording)
+                        else stringResource(R.string.dev_pick_another),
                         fontWeight = FontWeight.Medium
                     )
                 }
@@ -92,13 +95,13 @@ fun DevScreen(vm: ReplayViewModel = viewModel()) {
                         onClick = { vm.cancelRun() },
                         modifier = Modifier.height(48.dp),
                         shape = RoundedCornerShape(12.dp)
-                    ) { Text("Cancel") }
+                    ) { Text(stringResource(R.string.dev_cancel)) }
                 } else if (uri != null) {
                     OutlinedButton(
                         onClick = { vm.run() },
                         modifier = Modifier.height(48.dp),
                         shape = RoundedCornerShape(12.dp)
-                    ) { Text("Run again") }
+                    ) { Text(stringResource(R.string.dev_run_again)) }
                 }
             }
 
@@ -134,7 +137,7 @@ fun DevScreen(vm: ReplayViewModel = viewModel()) {
 
             // Message log
             Text(
-                "Messages",
+                stringResource(R.string.dev_messages_label),
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onBackground
@@ -151,7 +154,7 @@ fun DevScreen(vm: ReplayViewModel = viewModel()) {
                 if (msgs.isEmpty()) {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Text(
-                            "Pick a recording file to begin.",
+                            stringResource(R.string.dev_messages_empty),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -166,7 +169,7 @@ fun DevScreen(vm: ReplayViewModel = viewModel()) {
                     ) {
                         itemsIndexed(msgs) { _, m ->
                             Text(
-                                "• $m",
+                                stringResource(R.string.dev_message_bullet, m),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurface
                             )
@@ -187,32 +190,45 @@ fun DevScreen(vm: ReplayViewModel = viewModel()) {
 
 @Composable
 private fun FlightStatsDialog(summary: ReplaySummary, onDismiss: () -> Unit) {
+    // Hoist fallback strings out of non-composable lambdas
+    val notDetected = stringResource(R.string.dev_result_not_detected)
+    val noMarker    = stringResource(R.string.dev_result_no_marker)
+    val na          = stringResource(R.string.dev_result_na)
+
     AlertDialog(
         onDismissRequest = onDismiss,
         confirmButton = {
-            TextButton(onClick = onDismiss) { Text("Close") }
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.dev_dialog_close))
+            }
         },
         title = {
-            Text("Replay results", fontWeight = FontWeight.SemiBold)
+            Text(stringResource(R.string.dev_dialog_title), fontWeight = FontWeight.SemiBold)
         },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 ResultSection(
-                    title   = "Takeoff",
+                    title    = stringResource(R.string.dev_dialog_takeoff),
                     detected = summary.takeoffDataSec,
                     marker   = summary.takeoffMarkerSec,
-                    delta    = summary.takeoffDeltaSec
+                    delta    = summary.takeoffDeltaSec,
+                    notDetectedLabel = notDetected,
+                    noMarkerLabel    = noMarker,
+                    naLabel          = na
                 )
                 HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
                 ResultSection(
-                    title   = "Landing",
+                    title    = stringResource(R.string.dev_dialog_landing),
                     detected = summary.landingDataSec,
                     marker   = summary.landingMarkerSec,
-                    delta    = summary.landingDeltaSec
+                    delta    = summary.landingDeltaSec,
+                    notDetectedLabel = notDetected,
+                    noMarkerLabel    = noMarker,
+                    naLabel          = na
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "Complete flights detected: ${summary.flightsDetected}",
+                    stringResource(R.string.dev_dialog_flights_detected, summary.flightsDetected),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -226,13 +242,16 @@ private fun ResultSection(
     title: String,
     detected: Double?,
     marker: Double?,
-    delta: Double?
+    delta: Double?,
+    notDetectedLabel: String,
+    noMarkerLabel: String,
+    naLabel: String
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(title, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyMedium)
-        ResultRow("Detected", fmtClockOrDash(detected, "not detected"))
-        ResultRow("Marker",   fmtClockOrDash(marker,   "no marker"))
-        ResultRow("Δ",        fmtDelta(delta))
+        ResultRow(stringResource(R.string.dev_result_detected), fmtClockOrDash(detected, notDetectedLabel))
+        ResultRow(stringResource(R.string.dev_result_marker),   fmtClockOrDash(marker,   noMarkerLabel))
+        ResultRow(stringResource(R.string.dev_result_delta),    fmtDelta(delta, naLabel))
     }
 }
 
@@ -253,7 +272,7 @@ private fun fmtClockOrDash(t: Double?, fallback: String): String {
     return "%02d:%02d:%02d".format(Locale.US, s / 3600, (s % 3600) / 60, s % 60)
 }
 
-private fun fmtDelta(d: Double?): String {
-    if (d == null) return "n/a"
+private fun fmtDelta(d: Double?, naLabel: String): String {
+    if (d == null) return naLabel
     return "${if (d >= 0) "+" else "-"}${"%.1f".format(Locale.US, abs(d))} s"
 }

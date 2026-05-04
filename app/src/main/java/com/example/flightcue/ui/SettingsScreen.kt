@@ -9,9 +9,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.flightcue.R
 import com.example.flightcue.viewmodel.SettingsViewModel
 
 /** Settings screen for toggling detection and managing local flight log files. */
@@ -29,7 +31,7 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel(factory = SettingsViewModel
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         Text(
-            "Settings",
+            stringResource(R.string.settings_title),
             style = MaterialTheme.typography.headlineMedium,
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onBackground
@@ -53,13 +55,13 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel(factory = SettingsViewModel
                 ) {
                     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         Text(
-                            "Flight detection",
+                            stringResource(R.string.settings_detection_title),
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.SemiBold,
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Text(
-                            "Monitor sensors in the background",
+                            stringResource(R.string.settings_detection_subtitle),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -74,7 +76,7 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel(factory = SettingsViewModel
                     )
                 }
                 Text(
-                    "Requires accelerometer and barometer.",
+                    stringResource(R.string.settings_detection_note),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -93,7 +95,7 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel(factory = SettingsViewModel
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Text(
-                    "Data & export",
+                    stringResource(R.string.settings_data_export_section),
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onSurface
@@ -108,7 +110,7 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel(factory = SettingsViewModel
                     colors = ButtonDefaults.buttonColors(
                         containerColor = MaterialTheme.colorScheme.primary
                     )
-                ) { Text("Export flight logs (ZIP)", fontWeight = FontWeight.Medium) }
+                ) { Text(stringResource(R.string.settings_export_button), fontWeight = FontWeight.Medium) }
 
                 OutlinedButton(
                     onClick = { confirmClear = true },
@@ -118,7 +120,7 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel(factory = SettingsViewModel
                     shape = RoundedCornerShape(12.dp)
                 ) {
                     Text(
-                        "Clear flight logs",
+                        stringResource(R.string.settings_clear_button),
                         fontWeight = FontWeight.Medium,
                         color = MaterialTheme.colorScheme.error
                     )
@@ -127,23 +129,27 @@ fun SettingsScreen(vm: SettingsViewModel = viewModel(factory = SettingsViewModel
         }
     }
 
+    val logsCleared = stringResource(R.string.settings_logs_cleared_toast)
+
     if (confirmClear) {
         AlertDialog(
             onDismissRequest = { confirmClear = false },
-            title = { Text("Clear flight logs?") },
-            text = { Text("This deletes all local flight log files. This cannot be undone.") },
+            title = { Text(stringResource(R.string.settings_clear_dialog_title)) },
+            text = { Text(stringResource(R.string.settings_clear_dialog_text)) },
             confirmButton = {
                 TextButton(onClick = {
                     confirmClear = false
                     vm.clearLogs(ctx) {
-                        Toast.makeText(ctx, "Logs cleared", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(ctx, logsCleared, Toast.LENGTH_SHORT).show()
                     }
                 }) {
-                    Text("Delete", color = MaterialTheme.colorScheme.error)
+                    Text(stringResource(R.string.settings_clear_dialog_confirm), color = MaterialTheme.colorScheme.error)
                 }
             },
             dismissButton = {
-                TextButton(onClick = { confirmClear = false }) { Text("Cancel") }
+                TextButton(onClick = { confirmClear = false }) {
+                    Text(stringResource(R.string.settings_clear_dialog_cancel))
+                }
             }
         )
     }

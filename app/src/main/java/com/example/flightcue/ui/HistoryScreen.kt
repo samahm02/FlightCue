@@ -10,9 +10,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.flightcue.R
 import com.example.flightcue.viewmodel.FlightSummaryRow
 import com.example.flightcue.viewmodel.HistoryViewModel
 import java.text.SimpleDateFormat
@@ -36,7 +38,7 @@ fun HistoryScreen(
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         Text(
-            "Flight history",
+            stringResource(R.string.history_title),
             style = MaterialTheme.typography.headlineMedium,
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onBackground
@@ -45,7 +47,7 @@ fun HistoryScreen(
         if (rows.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(
-                    "No flights recorded yet.",
+                    stringResource(R.string.history_empty),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -83,7 +85,7 @@ private fun FlightsList(rows: List<FlightSummaryRow>) {
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            "Flight ${r.flightId}",
+                            stringResource(R.string.history_flight_id, r.flightId),
                             fontWeight = FontWeight.SemiBold,
                             style = MaterialTheme.typography.titleSmall,
                             color = MaterialTheme.colorScheme.onSurface
@@ -100,16 +102,20 @@ private fun FlightsList(rows: List<FlightSummaryRow>) {
 
                     // Timestamps
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        TimestampRow(label = "Departed", value = sdf.format(Date(r.startWall)))
-                        TimestampRow(label = "Arrived",  value = sdf.format(Date(r.endWall)))
+                        TimestampRow(
+                            label = stringResource(R.string.history_departed),
+                            value = sdf.format(Date(r.startWall))
+                        )
+                        TimestampRow(
+                            label = stringResource(R.string.history_arrived),
+                            value = sdf.format(Date(r.endWall))
+                        )
                     }
 
                     // Mode chips
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        ModeChip(label = "takeoff: ${r.startMode}")
-                        ModeChip(label = "landing: ${r.endMode}")
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        ModeChip(stringResource(R.string.history_takeoff_chip, r.startMode))
+                        ModeChip(stringResource(R.string.history_landing_chip, r.endMode))
                     }
                 }
             }

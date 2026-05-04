@@ -1,4 +1,3 @@
-// file: app/src/main/java/com/example/flightcue/MainActivity.kt
 package com.example.flightcue
 
 import android.Manifest
@@ -28,7 +27,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.core.app.NotificationManagerCompat
+import androidx.compose.ui.res.stringResource
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
@@ -58,27 +57,15 @@ class MainActivity : ComponentActivity() {
         notifRequestInFlight = false
 
         if (granted) {
-            Toast.makeText(
-                this,
-                "Notifications enabled. You will now see 'FlightCue running' and flight event notifications.",
-                Toast.LENGTH_SHORT
-            ).show()
+            Toast.makeText(this, getString(R.string.main_notif_granted_toast), Toast.LENGTH_SHORT).show()
 
-            // Start service now that notification posting is allowed
             if (pendingStartAfterNotifGrant) {
                 pendingStartAfterNotifGrant = false
                 FlightDetectionService.start(applicationContext)
             }
         } else {
             pendingStartAfterNotifGrant = false
-
-            Toast.makeText(
-                this,
-                "Notifications denied. FlightCue cannot run reliably in the background without a foreground notification. Enable notifications in system settings to use background detection.",
-                Toast.LENGTH_LONG
-            ).show()
-
-            // Safety: ensure we’re not running a foreground service without the ability to show its notif
+            Toast.makeText(this, getString(R.string.main_notif_denied_toast), Toast.LENGTH_LONG).show()
             FlightDetectionService.stop(applicationContext)
         }
     }
@@ -100,16 +87,12 @@ class MainActivity : ComponentActivity() {
                             ) == PackageManager.PERMISSION_GRANTED
 
                             if (!granted) {
-                                // Do NOT start service yet -> prevents “first start notification missing”
                                 pendingStartAfterNotifGrant = true
                                 maybeRequestNotificationPermissionOnce()
                                 return@collectLatest
                             }
                         }
-
-                        // Permission not needed (API < 33) or already granted
                         FlightDetectionService.start(applicationContext)
-
                     } else {
                         pendingStartAfterNotifGrant = false
                         FlightDetectionService.stop(applicationContext)
@@ -137,7 +120,6 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-
 @Composable
 private fun RootScaffold() {
     var tab by remember { mutableStateOf(MainTab.Home) }
@@ -148,26 +130,26 @@ private fun RootScaffold() {
                 NavigationBarItem(
                     selected = tab == MainTab.Home,
                     onClick = { tab = MainTab.Home },
-                    icon = { Icon(Icons.Outlined.AirplanemodeActive, contentDescription = "Home") },
-                    label = { Text("Home") }
+                    icon = { Icon(Icons.Outlined.AirplanemodeActive, contentDescription = stringResource(R.string.nav_home)) },
+                    label = { Text(stringResource(R.string.nav_home)) }
                 )
                 NavigationBarItem(
                     selected = tab == MainTab.History,
                     onClick = { tab = MainTab.History },
-                    icon = { Icon(Icons.Outlined.History, contentDescription = "History") },
-                    label = { Text("History") }
+                    icon = { Icon(Icons.Outlined.History, contentDescription = stringResource(R.string.nav_history)) },
+                    label = { Text(stringResource(R.string.nav_history)) }
                 )
                 NavigationBarItem(
                     selected = tab == MainTab.Settings,
                     onClick = { tab = MainTab.Settings },
-                    icon = { Icon(Icons.Outlined.Settings, contentDescription = "Settings") },
-                    label = { Text("Settings") }
+                    icon = { Icon(Icons.Outlined.Settings, contentDescription = stringResource(R.string.nav_settings)) },
+                    label = { Text(stringResource(R.string.nav_settings)) }
                 )
                 NavigationBarItem(
                     selected = tab == MainTab.Dev,
                     onClick = { tab = MainTab.Dev },
-                    icon = { Icon(Icons.Outlined.PlayCircle, contentDescription = "Dev") },
-                    label = { Text("Dev") }
+                    icon = { Icon(Icons.Outlined.PlayCircle, contentDescription = stringResource(R.string.nav_dev)) },
+                    label = { Text(stringResource(R.string.nav_dev)) }
                 )
             }
         }

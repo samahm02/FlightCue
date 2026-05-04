@@ -5,6 +5,7 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.flightcue.R
 import com.example.flightcue.data.replay.ReplayRepository
 import com.example.flightcue.data.replay.ReplayRunner
 import com.example.flightcue.data.replay.ReplaySummary
@@ -17,7 +18,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-
 
 /**
  * ViewModel for the replay screen.
@@ -44,11 +44,9 @@ class ReplayViewModel(app: Application) : AndroidViewModel(app) {
     private val _running = MutableStateFlow(false)
     val running: StateFlow<Boolean> = _running.asStateFlow()
 
-    // 0..1, updated by ReplayRunner
     private val _progress = MutableStateFlow(0f)
     val progress: StateFlow<Float> = _progress.asStateFlow()
 
-    // Simple status line under the bar
     private val _progressText = MutableStateFlow("")
     val progressText: StateFlow<String> = _progressText.asStateFlow()
 
@@ -58,7 +56,6 @@ class ReplayViewModel(app: Application) : AndroidViewModel(app) {
     fun clearSummary() { _summary.value = null }
 
     fun open(uri: Uri) {
-        // Stop live detection before running replay
         FlightDetectionService.stop(getApplication())
 
         _fileUri.value = uri
@@ -71,35 +68,33 @@ class ReplayViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val name = resolveDisplayName(uri)
             _fileName.value = name
-            postMsg("Selected: " + (name ?: uri.toString()))
+            postMsg(getString(R.string.replay_selected, name ?: uri.toString()))
         }
     }
 
     fun run() {
-        // Cancel any previous run
         lastRunJob?.cancel()
         lastRunJob = viewModelScope.launch {
             val uri = _fileUri.value ?: run {
-                postMsg("No file selected")
+                postMsg(getString(R.string.replay_no_file))
                 return@launch
             }
 
             _running.value = true
             _progress.value = 0f
-            _progressText.value = "Loading recording (this can take a bit for large files)…"
+            _progressText.value = getString(R.string.replay_loading)
 
             try {
-                // 1) Parse / load recording (I/O)
                 val src = withContext(Dispatchers.IO) {
                     repo.openRecording(getApplication(), uri)
                 }
 
-                // After we have the recording, we shift to ML stage
                 _progress.value = 0.1f
-                _progressText.value =
-                    "Analyzing ${_fileName.value ?: "recording"} with ML model…"
+                _progressText.value = getString(
+                    R.string.replay_analyzing,
+                    _fileName.value ?: getString(R.string.replay_fallback_name)
+                )
 
-                // 2) Heavy ML work (CPU) + real progress from ReplayRunner
                 val sum = withContext(Dispatchers.Default) {
                     runner.runFast(src) { frac ->
                         val mapped = 0.1f + 0.9f * frac.toFloat()
@@ -109,15 +104,15 @@ class ReplayViewModel(app: Application) : AndroidViewModel(app) {
 
                 _summary.value = sum
                 _progress.value = 1f
-                _progressText.value = "Analysis complete"
-                postMsg("Replay done.")
+                _progressText.value = getString(R.string.replay_analysis_complete)
+                postMsg(getString(R.string.replay_done))
             } catch (ce: CancellationException) {
-                _progressText.value = "Cancelled"
-                postMsg("Cancelled")
+                _progressText.value = getString(R.string.replay_cancelled)
+                postMsg(getString(R.string.replay_cancelled))
                 throw ce
             } catch (e: Exception) {
-                _progressText.value = "Replay failed"
-                postMsg("Replay failed: ${e.message}")
+                _progressText.value = getString(R.string.replay_failed)
+                postMsg(getString(R.string.replay_failed_reason, e.message))
             } finally {
                 _running.value = false
             }
@@ -127,6 +122,9 @@ class ReplayViewModel(app: Application) : AndroidViewModel(app) {
     fun cancelRun() {
         lastRunJob?.cancel()
     }
+
+    private fun getString(resId: Int, vararg args: Any?): String =
+        getApplication<Application>().getString(resId, *args)
 
     private fun postMsg(m: String) {
         _messages.value = _messages.value + m
@@ -138,9 +136,7 @@ class ReplayViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 ctx.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
                     val idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                    if (idx >= 0 && cursor.moveToFirst()) {
-                        cursor.getString(idx)
-                    } else null
+                    if (idx >= 0 && cursor.moveToFirst()) cursor.getString(idx) else null
                 }
             } catch (_: Exception) {
                 null

@@ -8,10 +8,12 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.flightcue.R
 import com.example.flightcue.domain.events.FlightDomainEvent
 import com.example.flightcue.domain.events.FlightState
 import com.example.flightcue.viewmodel.DetectionViewModel
@@ -32,7 +34,7 @@ fun HomeScreen(vm: DetectionViewModel = viewModel(factory = DetectionViewModel.F
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         Text(
-            "FlightCue",
+            stringResource(R.string.home_title),
             style = MaterialTheme.typography.headlineMedium,
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onBackground
@@ -54,12 +56,15 @@ fun HomeScreen(vm: DetectionViewModel = viewModel(factory = DetectionViewModel.F
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(
-                        "Flight state",
+                        stringResource(R.string.home_flight_state_label),
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Text(
-                        if (state == FlightState.Flying) "Airborne" else "On ground",
+                        if (state == FlightState.Flying)
+                            stringResource(R.string.home_state_airborne)
+                        else
+                            stringResource(R.string.home_state_on_ground),
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.onSurface
@@ -103,23 +108,23 @@ fun HomeScreen(vm: DetectionViewModel = viewModel(factory = DetectionViewModel.F
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Text(
-                    "Last event",
+                    stringResource(R.string.home_last_event_label),
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 when (val ev = last) {
                     null -> Text(
-                        "No events yet",
+                        stringResource(R.string.home_no_events),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.bodyMedium
                     )
                     is FlightDomainEvent.FlightStarted -> EventRow(
-                        label = "Takeoff detected",
+                        label = stringResource(R.string.home_event_takeoff),
                         confidence = ev.confidence,
                         timeSec = ev.atSec
                     )
                     is FlightDomainEvent.FlightEnded -> EventRow(
-                        label = "Landing detected",
+                        label = stringResource(R.string.home_event_landing),
                         confidence = ev.confidence,
                         timeSec = ev.atSec
                     )
@@ -141,7 +146,10 @@ fun HomeScreen(vm: DetectionViewModel = viewModel(factory = DetectionViewModel.F
             )
         ) {
             Text(
-                if (state == FlightState.NotFlying) "Mark Takeoff (forced)" else "Mark Landing (forced)",
+                if (state == FlightState.NotFlying)
+                    stringResource(R.string.home_button_mark_takeoff)
+                else
+                    stringResource(R.string.home_button_mark_landing),
                 fontWeight = FontWeight.SemiBold,
                 fontSize = 15.sp
             )
@@ -163,7 +171,7 @@ private fun EventRow(label: String, confidence: Double, timeSec: Double) {
             color = MaterialTheme.colorScheme.onSurface
         )
         Text(
-            "conf ${"%.3f".format(confidence)}  •  t≈${"%.1f".format(timeSec)}s",
+            stringResource(R.string.home_event_meta, confidence, timeSec),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
